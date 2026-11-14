@@ -12,6 +12,8 @@ import { commandOf, dshHome, hashText, safeName, sessionIdOf, textOf as contentT
 import { budgetFor, classifyCommand, renderBounded } from './lib/budget.js'
 import { writeToolLog } from './lib/archive.js'
 import { DEFAULT_DEDUPE_MIN_CHARS, DedupCache, dedupKey, diffLines } from './lib/dedup.js'
+import { MetricsRecorder, metricOf } from './lib/metrics.js'
+import { cleanupOutputs } from './lib/cleanup.js'
 
 export const name = 'dsh-context-guard'
 
@@ -116,10 +118,32 @@ function guardConfig(config) {
     dedupTtlMs: config.dedupTtlMs,
     dedupMaxEntries: config.dedupMaxEntries,
     dedupeMinChars: config.dedupeMinChars,
+    metricsEnabled: config.metricsEnabled !== false,
+    metricsDir: typeof config.metricsDir === 'string' && config.metricsDir ? config.metricsDir : join(dshHome(), 'context-guard', 'metrics'),
+    cleanupEnabled: config.cleanupEnabled !== false,
+    cleanup: Object.fromEntries(Object.entries({
+      retentionDays: config.retentionDays,
+      maxSessionBytes: config.maxSessionBytes,
+      maxTotalBytes: config.maxTotalBytes,
+      maxFilesPerSession: config.maxFilesPerSession,
+      keepRecentInActiveSession: config.keepRecentInActiveSession,
+    }).filter(([, value]) => value !== undefined)),
+    cleanupIntervalMs: Number(config.cleanupIntervalMs) || 5 * 60 * 1000,
   }
 }
 
-async function guardToolResult(exec, result, decision, cfg, cache, logger) {
+let lastCleanupAt = 0
+
+function maybeCleanup(cfg, currentSession, logger) {
+  if (!cfg.cleanupEnabled) return
+  const now = Date.now()
+  if (now - lastCleanupAt < cfg.cleanupIntervalMs) return
+  lastCleanupAt = now
+  void cleanupOutputs(cfg.outputDir, { ...cfg.cleanup, currentSession, now })
+    .catch(error => logger?.warn?.('context-guard: 清理工具输出失败: %s', error))
+}
+
+async function guardToolResult(exec, result, decision, cfg, cache, metrics, logger) {
   if (decision.kind !== 'accept') return decision
   if (!cfg.enabled || !cfg.toolNames.includes(exec?.name)) return decision
   if (decision.value !== undefined && !decision.content) return decision
@@ -130,8 +154,29 @@ async function guardToolResult(exec, result, decision, cfg, cache, logger) {
   const budget = budgetFor(command, result?.isError, cfg)
   const now = Date.now()
   const sessionId = sessionIdOf(exec)
+  const cmdType = classifyCommand(command)
   const cacheable = cfg.dedupEnabled && !result?.isError && text.length >= (Number(cfg.dedupeMinChars) || DEFAULT_DEDUPE_MIN_CHARS)
   const key = cacheable ? dedupKey(sessionId, exec.name, exec.arguments) : null
+
+  const finish = async (out, extra = {}) => {
+    if (cfg.metricsEnabled) {
+      const emitted = out?.content ? contentText(out.content).length : text.length
+      await metrics.record(metricOf({
+        session: sessionId,
+        callId: exec.callId,
+        tool: exec.name,
+        cmdType,
+        originalChars: text.length,
+        emittedChars: emitted,
+        dedup: extra.dedup,
+        diffSummary: extra.diffSummary,
+        isError: result?.isError,
+        archived: extra.archived,
+      }))
+    }
+    maybeCleanup(cfg, sessionId, logger)
+    return out
+  }
 
   if (key) {
     const previous = cache.get(key, now)
@@ -141,7 +186,7 @@ async function guardToolResult(exec, result, decision, cfg, cache, logger) {
         cache.touch(key, now)
         const pointer = previous.logPath || `call ${previous.callId}`
         const summary = `[context-guard:dedup] ${exec.name} 输出与 call ${previous.callId} 完全相同（${text.length} chars）\n完整输出: ${pointer}\n[... 重复内容已省略，未重新写入上下文 ...]`
-        return { kind: 'accept', content: [{ type: 'text', text: summary }], ...(decision.additionalContexts ? { additionalContexts: decision.additionalContexts } : {}) }
+        return finish({ kind: 'accept', content: [{ type: 'text', text: summary }], ...(decision.additionalContexts ? { additionalContexts: decision.additionalContexts } : {}) }, { dedup: true, archived: previous.logPath })
       }
 
       const diff = diffLines(previous.text, text)
@@ -153,7 +198,7 @@ async function guardToolResult(exec, result, decision, cfg, cache, logger) {
         } catch (error) {
           logger?.warn?.('context-guard: 增量结果落盘失败: %s', error)
         }
-        const header = `[context-guard:diff] ${exec.name} 输出与 call ${previous.callId} 不同：-${diff.removedCount} / +${diff.addedCount} 行；类型 ${classifyCommand(command)}\n完整输出: ${logPath || '(落盘失败)'}\n`
+        const header = `[context-guard:diff] ${exec.name} 输出与 call ${previous.callId} 不同：-${diff.removedCount} / +${diff.addedCount} 行；类型 ${cmdType}\n完整输出: ${logPath || '(落盘失败)'}\n`
         const footer = '\n[... 仅显示变化块，未变化的上下文已省略 ...]'
         const summary = renderBounded(diff.summary, {
           budget,
@@ -163,20 +208,19 @@ async function guardToolResult(exec, result, decision, cfg, cache, logger) {
           tailChars: cfg.tailChars,
         })
         cache.set(key, { hash: hashText(text), text, callId: exec.callId, logPath }, now)
-        return { kind: 'accept', content: [{ type: 'text', text: summary }], ...(decision.additionalContexts ? { additionalContexts: decision.additionalContexts } : {}) }
+        return finish({ kind: 'accept', content: [{ type: 'text', text: summary }], ...(decision.additionalContexts ? { additionalContexts: decision.additionalContexts } : {}) }, { diffSummary: true, archived: logPath })
       }
     }
   }
 
   if (text.length <= budget) {
     if (key) cache.set(key, { hash: hashText(text), text, callId: exec.callId, logPath: null }, now)
-    return decision
+    return finish(decision)
   }
 
   try {
     const log = await writeToolLog(cfg.outputDir, sessionId, exec.callId, text)
-    const category = classifyCommand(command)
-    const header = `[context-guard] ${exec.name} 输出 ${text.length} chars，超过 ${budget} 预算；类型 ${category}${result?.isError ? '；错误结果' : ''}\n完整输出: ${log.path}\n`
+    const header = `[context-guard] ${exec.name} 输出 ${text.length} chars，超过 ${budget} 预算；类型 ${cmdType}${result?.isError ? '；错误结果' : ''}\n完整输出: ${log.path}\n`
     const footer = '\n[... 中间已裁剪，完整内容见上方路径 ...]'
     const summary = renderBounded(text, {
       budget,
@@ -186,10 +230,10 @@ async function guardToolResult(exec, result, decision, cfg, cache, logger) {
       tailChars: cfg.tailChars,
     })
     if (key) cache.set(key, { hash: hashText(text), text, callId: exec.callId, logPath: log.path }, now)
-    return { kind: 'accept', content: [{ type: 'text', text: summary }], ...(decision.additionalContexts ? { additionalContexts: decision.additionalContexts } : {}) }
+    return finish({ kind: 'accept', content: [{ type: 'text', text: summary }], ...(decision.additionalContexts ? { additionalContexts: decision.additionalContexts } : {}) }, { archived: log.path })
   } catch (error) {
     logger?.warn?.('context-guard: 工具输出落盘失败，保留原结果: %s', error)
-    return decision
+    return finish(decision)
   }
 }
 
@@ -197,6 +241,10 @@ export function apply(ctx, config = {}) {
   const dir = typeof config.dir === 'string' && config.dir ? config.dir : undefined
   const cfg = guardConfig(config)
   const cache = new DedupCache({ ttlMs: cfg.dedupTtlMs, maxEntries: cfg.dedupMaxEntries })
+  const metrics = new MetricsRecorder(cfg.metricsDir, { logger: ctx.logger })
+  if (cfg.cleanupEnabled) {
+    void cleanupOutputs(cfg.outputDir, { ...cfg.cleanup }).catch(error => ctx.logger?.warn?.('context-guard: 启动清理失败: %s', error))
+  }
 
   ctx.on('session/event', (session, event) => {
     if (event.type === 'compaction/start') {
@@ -217,6 +265,6 @@ export function apply(ctx, config = {}) {
 
   ctx.on('tools/post-execute', async (exec, result, next) => {
     const decision = await next()
-    return guardToolResult(exec, result, decision, cfg, cache, ctx.logger)
+    return guardToolResult(exec, result, decision, cfg, cache, metrics, ctx.logger)
   })
 }

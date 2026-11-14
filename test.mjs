@@ -1,10 +1,11 @@
 import assert from 'node:assert/strict'
-import { mkdtemp, readFile, readdir } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, readdir, utimes, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { name, apply } from './index.js'
 import { budgetFor, classifyCommand, renderBounded } from './lib/budget.js'
 import { DedupCache } from './lib/dedup.js'
+import { cleanupOutputs } from './lib/cleanup.js'
 
 // 命令分类与预算
 assert.equal(classifyCommand('cat /var/log/syslog'), 'unbounded')
@@ -38,7 +39,7 @@ const ctx = {
   },
   logger: { warn() {} },
 }
-apply(ctx, { dir, outputDir, thresholdChars: 3000 })
+apply(ctx, { dir, outputDir, metricsDir: join(dir, 'metrics'), thresholdChars: 3000, cleanupEnabled: false })
 assert.equal(name, 'dsh-context-guard')
 
 // 压缩归档
@@ -111,6 +112,26 @@ const changedExec = { ...exec, callId: 'call-test-3' }
 const changed = await handlers.get('tools/post-execute')[0](changedExec, changedResult, async () => ({ kind: 'accept' }))
 assert.match(changed.content[0].text, /\[context-guard:diff\]/)
 assert.match(changed.content[0].text, /\+ changed-line/)
+
+// 指标 JSONL
+const metricFiles = await readdir(join(dir, 'metrics'))
+assert.ok(metricFiles.includes('session-test.jsonl'))
+const metricLines = (await readFile(join(dir, 'metrics', 'session-test.jsonl'), 'utf8')).trim().split('\n').map(JSON.parse)
+assert.ok(metricLines.length >= 3)
+assert.ok(metricLines.some(item => item.dedup === true))
+assert.ok(metricLines.some(item => item.diffSummary === true))
+assert.ok(metricLines.every(item => item.savedChars >= 0))
+
+// 清理：保留期内不删，过期且非当前会话最新文件删除
+const cleanupDir = join(dir, 'cleanup-root')
+await mkdir(join(cleanupDir, 'old-session'), { recursive: true })
+await writeFile(join(cleanupDir, 'old-session', 'a.log'), 'aaa')
+await writeFile(join(cleanupDir, 'old-session', 'b.log'), 'bbb')
+const old = new Date(Date.now() - 10 * 86400000)
+await utimes(join(cleanupDir, 'old-session', 'a.log'), old, old)
+await utimes(join(cleanupDir, 'old-session', 'b.log'), old, old)
+const cleaned = await cleanupOutputs(cleanupDir, { retentionDays: 7, currentSession: 'other' })
+assert.equal(cleaned.deleted, 2)
 
 // 低于预算保持原决策
 const smallResult = { isError: false, content: [{ type: 'text', text: 'ok' }] }
