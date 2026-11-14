@@ -1,6 +1,6 @@
 # dsh-context-guard 计划与实施步骤
 
-> 状态：实施中。本文是唯一方案文档；代码、README、STATUS 发生变化时同步更新。
+> 状态：代码已实现（L1-L5），待宿主机执行 `scripts/apply-profile.sh` 并做真实会话验证。
 > 原则：只做一个插件，能力统一收进 `dsh-context-guard`，不再拆 `dsh-bash-stats`、`dsh-tool-budget`、`dsh-output-archive`。
 
 ## 1. 目标

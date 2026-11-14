@@ -1,86 +1,133 @@
-# dsh-compaction-archive
+# dsh-context-guard
 
-DSH 插件：**自动压缩前**先落盘一份可读的上下文快照，**压缩后**把 DSH 自己生成的结构化摘要写成
-`STATUS.md`，方便长任务或换会话后快速恢复目标、决定和改动。
+DSH Host-only 插件：把长工具输出挡在上下文之外，同时保留完整证据。
 
-> DSH 原生压缩只在会话日志里生成 `compaction/summary` checkpoint，不会写项目文件；
-> 本插件只负责把这份已有摘要和压缩前快照落盘，不额外调用模型。
+解决的问题：长会话里 `bash` 输出（`ls -la`、整文件 `cat`、`journalctl`、重复的 `curl` 轮询）会被反复计费；DSH 官方 persistent-bash 默认还会在 16,000 字符处截断，导致落盘也不完整。
 
-## 工作方式
+本插件做四件事：
 
-| 事件 | 输出 |
-|---|---|
-| `compaction/start` | `STATUS.md`：标题、cwd、最近用户意图、最近工具调用 |
-| `compaction/summary` | 用 DSH 的结构化摘要更新 `STATUS.md`，并另存一份带时间戳的历史文件 |
-
-默认输出：
-
-```text
-${DSH_HOME:-$HOME/.dsh}/compaction-archive/<session-id>/STATUS.md
-${DSH_HOME:-$HOME/.dsh}/compaction-archive/<session-id>/<UTC时间>-compaction.md
-```
-
-- 只有实际发生压缩的会话才会产生文件。
-- 不改变压缩阈值，不替代 `@deepseek-ai/dsh-compaction-basic`。
-- 写入失败只记 warning，不阻塞压缩。
+1. **有界摘要**：输出超过预算时，完整文本写盘，上下文只保留 head/tail、命令类型和文件路径；
+2. **去重**：同一 session + tool + args 在 10 分钟内结果相同，只回上一次 call 的指针；结果变化只回行级 diff；
+3. **只读诊断**：`scripts/inspect.sh` 用固定模式替代零散命令；
+4. **压缩归档 + 指标 + 清理**：压缩前后写 `STATUS.md`，统计节省量，按保留期和配额清磁盘。
 
 ## 安装
 
-### 从插件市场 / npm（发布后）
-
 ```bash
-dsh plugin --profile web add dsh-compaction-archive
+dsh plugin --profile web add link:/home/zh/www/personalCloud/task/dsh-context-guard
 ```
 
-在 DSH 插件管理器中安装 bundle，或在 profile 的 `cordis.patch.yml` 加入：
+然后执行宿主机迁移脚本（会备份 profile）：
+
+```bash
+task/dsh-context-guard/scripts/apply-profile.sh
+```
+
+脚本做三件事：
+
+- 把旧的 `compaction-archive` 插入项改成 `context-guard`；
+- 给 `persistent-bash` 加 `maxOutputChars: 65536`，否则插件只能拿到被截断的 16K；
+- 给官方 `tool-result-pruner` 设置 8192/4096/1024。
+
+验证：
+
+```bash
+dsh --profile web --dump-config | grep -E "context-guard|maxOutputChars|tool-result-pruner"
+```
+
+## 输出预算
+
+默认 `thresholdChars=3000`、`headChars=1200`、`tailChars=800`，硬顶 12000。
+
+| 命令类型 | 示例 | 预算 |
+|---|---|---:|
+| 默认 | 普通 bash | 3000 |
+| 快速状态 | `ps`、`df`、`free`、`ss`、`systemctl status` | 2500 |
+| 有界日志 | `journalctl --since`、`tail`、`docker logs --tail` | 4000 |
+| 有界源码 | `sed -n`、`rg`、`grep`、`git show` | 5000 |
+| diff | `git diff` | 6000 |
+| 构建/测试 | `npm test`、`go test`、`pytest` | 8000 |
+| 错误结果 | 非零退出 | 至少 4000 |
+| 显式声明 | 首行 `# dsh-budget=8000` | 最高 12000 |
+
+无界命令（`cat`、没有 `--since`/`-n` 的 `journalctl`、`find /`、`du /`）压到 2500，并提示改用有界命令。
+
+写盘失败时回退原始结果，不丢证据。
+
+## 去重与 diff
+
+- 缓存键：`session + tool + args`；
+- TTL：10 分钟，最近使用会续期；
+- 只处理 ≥800 字符的非错误结果，避免用指针替代 `ok` 反而更贵；
+- **每次都真实执行命令**，不做执行缓存（持久 shell 的 cwd/env 状态不可靠）；
+- 相同结果：`[context-guard:dedup]` + 上次 call 指针；
+- 变化结果：`[context-guard:diff]`，只显示前后缀之间的变化块；
+- 缓存是进程内内存，重启后失效；这是安全的有意选择。
+
+## 数据目录
+
+```text
+${DSH_HOME:-$HOME/.dsh}/tool-output/<session-id>/<timestamp>-<call-id>.log
+${DSH_HOME:-$HOME/.dsh}/context-guard/metrics/<session-id>.jsonl
+${DSH_HOME:-$HOME/.dsh}/context-guard/metrics/STATUS.md
+${DSH_HOME:-$HOME/.dsh}/compaction-archive/<session-id>/STATUS.md
+```
+
+清理策略：保留 7 天；单会话 50MB / 300 文件；全局 500MB；删除最旧文件；当前会话保留最近 3 个。目录 0700、文件 0600。
+
+## 指标
+
+JSONL 字段：`session`、`call`、`tool`、`cmdType`、`originalChars`、`emittedChars`、`savedChars`、`dedup`、`diffSummary`、`isError`、`archived`。
+
+token 节省按 `chars/4` 估算，并在 `STATUS.md` 明确标注 `estimateMethod` 等价说明；当前只统计，不展示 UI。
+
+## inspect.sh
+
+```bash
+task/dsh-context-guard/scripts/inspect.sh overview
+task/dsh-context-guard/scripts/inspect.sh service nginx
+task/dsh-context-guard/scripts/inspect.sh app qbittorrent
+task/dsh-context-guard/scripts/inspect.sh logs /var/log/syslog 80
+task/dsh-context-guard/scripts/inspect.sh git /home/zh/www/personalCloud
+task/dsh-context-guard/scripts/inspect.sh ports
+task/dsh-context-guard/scripts/inspect.sh docker
+task/dsh-context-guard/scripts/inspect.sh http http://127.0.0.1:3082/
+task/dsh-context-guard/scripts/inspect.sh report
+```
+
+原则：不使用 sudo、不启停服务、每段输出有行数/字节上限。检测到 `linuxops` 时只调用 `sysinfo`、`network ports`、`service status/logs` 等只读子命令，不存在则回退 `systemctl`/`journalctl`/`ss`。
+
+本机私有扩展放 `~/.dsh/context-guard/inspect.local.sh`，不随插件发布。
+
+## 配置示例
 
 ```yaml
 - insert:
-    - id: compaction-archive
-      name: dsh-compaction-archive
+    - id: context-guard
+      name: dsh-context-guard
+      config:
+        thresholdChars: 3000
+        headChars: 1200
+        tailChars: 800
+        dedupeMinChars: 800
+        dedupTtlMs: 600000
+        retentionDays: 7
+        maxSessionBytes: 52428800
+        maxTotalBytes: 524288000
+        maxFilesPerSession: 300
 ```
 
-### 本地 link 安装（开发）
+## 测试
 
 ```bash
-dsh plugin --profile web add link:/home/zh/www/personalCloud/task/dsh-compaction-archive
+cd task/dsh-context-guard && npm test
 ```
 
-然后把上面的 `insert` 写进 `~/.dsh/profiles/web/cordis.patch.yml`；
-`superagent` profile 同理。
+测试覆盖：压缩归档、命令分类/预算、有界渲染、大输出落盘、去重、行级 diff、指标、过期清理、`inspect.sh` 语法与帮助。
 
-## 配置
+## 边界
 
-当前无需配置。归档根目录跟随 `DSH_HOME`，也可在 profile patch 的插件行里传：
-
-```yaml
-- id: compaction-archive
-  name: dsh-compaction-archive
-  config:
-    dir: /path/to/archive
-```
-
-实现读取 `config.dir`；未提供时使用 `${DSH_HOME:-$HOME/.dsh}/compaction-archive`。
-
-## 验证
-
-```bash
-node task/dsh-compaction-archive/test.mjs
-HOME=/home/zh /home/zh/opt/node24/bin/node \
-  /home/zh/.npm-global/lib/node_modules/@deepseek-ai/dsh/lib/bin.js \
-  --profile web --dump-config | grep -A2 compaction-archive
-```
-
-## 安全边界
-
-- 只监听 `session/event`，不注册网络端口、不读凭据；
-- 只写 `${DSH_HOME}/compaction-archive/` 下的 Markdown；
-- 摘要内容来自 DSH 本地压缩结果，不额外上传。
-
-## 发布
-
-见 [`PUBLISHING.md`](PUBLISHING.md)。
-
-## License
-
-MIT
+- 默认只处理 `bash` / `persistent-bash` / `terminal-bash`，其他工具可配 `toolNames`；
+- 去重不跨进程持久化；
+- 不做写操作诊断（kill、重启、cron、备份恢复等）；
+- linuxops 不打包，只作为可选本机工具。

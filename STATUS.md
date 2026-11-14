@@ -2,7 +2,7 @@
 
 - 更新时间：2026-11-14
 - 一句话：DSH 工具输出预算/落盘 + 压缩归档；后续补去重、指标、清理与 inspect.sh。
-- 位置：`task/dsh-context-guard/`；已改名，待更新 profile link。
+- 位置：`task/dsh-context-guard/`；代码已完成，待宿主机执行 `scripts/apply-profile.sh` 迁移 profile。
 
 ## 已完成
 
@@ -27,6 +27,8 @@
 | 1 | 创建公开 GitHub 仓库 `person-clouds/dsh-context-guard` | 见 `PUBLISHING.md` |
 | 2 | 发布 npm `dsh-context-guard@0.2.0` | 需 npm 登录 |
 | 3 | 提交 awesome-dsh-plugin 市场条目 | 仓库满 1 天后 |
+| 4 | 宿主机执行 `scripts/apply-profile.sh` 并重启 web/superagent | 沙箱对 `~/.dsh` 只读 |
+| 5 | 用真实长输出验证 `maxOutputChars` 与落盘完整性 | 需重启 DSH |
 
 ## 验证记录
 
@@ -35,4 +37,5 @@
 | 2026-11-14 | `node test.mjs` | ok；压缩归档、预算裁剪、落盘、去重、diff、指标、清理、inspect.sh 语法/帮助均通过 |
 | 2026-11-14 | `dsh --profile web --dump-config` | `compaction-archive` 已出现在组合树 |
 | 2026-11-14 | `dsh --profile superagent --dump-config` | 同上 |
-| 2026-11-14 | `npm pack --dry-run` | 5 files / 4.3 kB，通过 |
+| 2026-11-14 | `npm pack --dry-run --cache /tmp/npm-cache` | 14 files / 17.5 kB，通过 |
+| 2026-11-14 | `scripts/apply-profile.sh` 临时 HOME 连跑两次 | 迁移正确且无重复条目 |
