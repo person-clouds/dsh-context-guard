@@ -1,6 +1,6 @@
 # 发布到 DSH 插件市场
 
-> 状态：**发布材料已就绪，尚未创建公开仓库 / 发布 npm**。
+> 状态：**公开仓库已创建；发布材料已就绪，尚未发布 npm。**
 > 目标仓库：`person-clouds/dsh-context-guard`
 > npm 包名：`dsh-context-guard`
 
@@ -38,7 +38,7 @@ GitHub 仓库添加 topic：`dsh-plugin`。
 cd /home/zh/www/personalCloud/task/dsh-context-guard
 npm test
 npm pack --pack-destination release
-# 产物：release/dsh-context-guard-0.2.0.tgz
+# 产物：release/dsh-context-guard-0.3.0.tgz
 ```
 
 ## 三、发布 npm（需要先登录）
@@ -50,8 +50,8 @@ npm publish --registry=https://registry.npmjs.org --access public
 
 ## 四、创建 GitHub Release
 
-- tag：`v0.2.0`
-- 上传 `release/dsh-context-guard-0.2.0.tgz`
+- tag：`v0.3.0`
+- 上传 `release/dsh-context-guard-0.3.0.tgz`
 - Release 资源名建议保持无版本号：`dsh-context-guard.tgz`
 
 ## 五、提交 DSH 插件市场

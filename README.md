@@ -4,12 +4,13 @@ DSH Host-only 插件：把长工具输出挡在上下文之外，同时保留完
 
 解决的问题：长会话里 `bash` 输出（`ls -la`、整文件 `cat`、`journalctl`、重复的 `curl` 轮询）会被反复计费；DSH 官方 persistent-bash 默认还会在 16,000 字符处截断，导致落盘也不完整。
 
-本插件做四件事：
+本插件做五件事：
 
 1. **有界摘要**：输出超过预算时，完整文本写盘，上下文只保留 head/tail、命令类型和文件路径；
 2. **去重**：同一 session + tool + args 在 10 分钟内结果相同，只回上一次 call 的指针；结果变化只回行级 diff；
 3. **只读诊断**：`scripts/inspect.sh` 用固定模式替代零散命令；
-4. **压缩归档 + 指标 + 清理**：压缩前后写 `STATUS.md`，统计节省量，按保留期和配额清磁盘。
+4. **风险命令确认**：`rm -rf`、`git reset --hard`、`curl | bash`、未知链接、提权等执行前发警示，交给 DSH 审批端让用户确认；
+5. **压缩归档 + 指标 + 清理**：压缩前后写 `STATUS.md`，统计节省量，按保留期和配额清磁盘。
 
 ## 安装
 
@@ -53,6 +54,24 @@ dsh --profile web --dump-config | grep -E "context-guard|maxOutputChars|tool-res
 无界命令（`cat`、没有 `--since`/`-n` 的 `journalctl`、`find /`、`du /`）压到 2500，并提示改用有界命令。
 
 写盘失败时回退原始结果，不丢证据。
+
+## 风险命令警示
+
+`tools/pre-execute` 在 DSH 自身权限策略通过后再做一层保底检查。命中规则时返回 `ask`，由 DSH 审批端弹出确认；用户不确认则命令不执行。它不修改命令、不做沙箱，也不替代 DSH 的权限/审批策略。
+
+默认覆盖：
+
+| 类别 | 例子 |
+|---|---|
+| 删除文件/仓库 | `rm -rf`、`rm -rf .git`、`find ... -delete`、`shred`、`truncate -s 0` |
+| git 破坏操作 | `git reset --hard`、`git clean -fd`、`git push --force`、`git branch -D` |
+| 下载即执行 | `curl ... \| bash`、`bash <(curl ...)` |
+| 未知链接 | `curl` / `wget` / `xdg-open` 访问白名单外主机，或明文 HTTP |
+| 系统破坏 | 关机、停服务、清防火墙、杀进程、删容器/数据卷/K8s 资源 |
+| 数据库 | `DROP DATABASE/TABLE`、`TRUNCATE TABLE`、无 `WHERE` 的 `DELETE FROM` |
+| 提权/清历史 | `sudo`、`doas`、`su -`、`history -c` |
+
+默认链接白名单：`localhost`、`127.0.0.1`、`[::1]`、`github.com`、`gitee.com`、`raw.githubusercontent.com`；可用 `riskAllowHosts` 覆盖。规则是正则启发式，可能误报或漏报，高风险生产操作仍应人工复核。
 
 ## 去重与 diff
 
@@ -111,6 +130,8 @@ task/dsh-context-guard/scripts/inspect.sh report
         tailChars: 800
         dedupeMinChars: 800
         dedupTtlMs: 600000
+        riskCheckEnabled: true
+        # riskAllowHosts: [localhost, 127.0.0.1, github.com]
         retentionDays: 7
         maxSessionBytes: 52428800
         maxTotalBytes: 524288000
@@ -123,11 +144,12 @@ task/dsh-context-guard/scripts/inspect.sh report
 cd task/dsh-context-guard && npm test
 ```
 
-测试覆盖：压缩归档、命令分类/预算、有界渲染、大输出落盘、去重、行级 diff、指标、过期清理、`inspect.sh` 语法与帮助。
+测试覆盖：压缩归档、命令分类/预算、有界渲染、大输出落盘、去重、行级 diff、指标、过期清理、风险命令识别与 `ask` 门禁、`inspect.sh` 语法与帮助。
 
 ## 边界
 
 - 默认只处理 `bash` / `persistent-bash` / `terminal-bash`，其他工具可配 `toolNames`；
 - 去重不跨进程持久化；
+- 风险检查是启发式保底，不是安全沙箱；`ask` 由 DSH 审批服务裁决，无审批端时按 DSH 规则拒绝；
 - 不做写操作诊断（kill、重启、cron、备份恢复等）；
 - linuxops 不打包，只作为可选本机工具。
