@@ -26,7 +26,7 @@ old_block = """# compaction-archive：自动压缩前写 STATUS 快照，压缩�
 new_block = """# context-guard：工具输出预算/落盘/去重 + 压缩前 STATUS 快照。
 - insert:
     - id: context-guard
-      name: dsh-context-guard
+      name: '@fenghoer/dsh-context-guard'
 """
 if old_block in text:
     text = text.replace(old_block, new_block)
@@ -34,7 +34,7 @@ if old_block in text:
 else:
     before = text
     text = text.replace('    - id: compaction-archive\n      name: dsh-compaction-archive\n',
-                        '    - id: context-guard\n      name: dsh-context-guard\n')
+                        '    - id: context-guard\n      name: \'@fenghoer/dsh-context-guard\'\n')
     text = text.replace('# compaction-archive：', '# context-guard：')
     if text != before:
         changed = True
