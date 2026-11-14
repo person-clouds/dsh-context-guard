@@ -71,7 +71,7 @@ ${DSH_HOME:-$HOME/.dsh}/context-guard/metrics/<session-id>.jsonl
 ## 4.1 风险命令警示
 
 - `tools/pre-execute` 先执行 `next()`，已有 deny/cancel/ask 不覆盖；
-- 仅对 `bash` / `persistent-bash` / `terminal-bash` 检查；
+- 默认检查 `bash` / `persistent-bash` / `terminal-bash` 与 `web_fetch`；
 - 命中删除、强推、下载执行、未知链接、关机/停服、容器删除、数据库清空、提权等规则时返回 `ask`；
 - `displayReason` 提供中英文说明，命令预览截断到 300 字符；
 - 链接白名单可配 `riskAllowHosts`；

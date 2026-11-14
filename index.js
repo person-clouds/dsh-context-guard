@@ -110,7 +110,9 @@ function guardConfig(config) {
     enabled: config.enabled !== false,
     toolNames,
     riskCheckEnabled: config.riskCheckEnabled !== false,
-    riskToolNames: Array.isArray(config.riskToolNames) && config.riskToolNames.length > 0 ? config.riskToolNames : toolNames,
+    riskToolNames: Array.isArray(config.riskToolNames) && config.riskToolNames.length > 0
+      ? config.riskToolNames
+      : [...new Set([...toolNames, 'web_fetch'])],
     riskAllowHosts: Array.isArray(config.riskAllowHosts) ? config.riskAllowHosts : undefined,
     outputDir: typeof config.outputDir === 'string' && config.outputDir ? config.outputDir : join(dshHome(), 'tool-output'),
     thresholdChars: config.thresholdChars,
@@ -272,7 +274,9 @@ export function apply(ctx, config = {}) {
     const decision = await next()
     if (decision.kind !== 'allow') return decision
     if (!cfg.enabled || !cfg.riskCheckEnabled || !cfg.riskToolNames.includes(exec?.name)) return decision
-    const command = commandOf(exec)
+    const command = commandOf(exec) || (exec?.name === 'web_fetch' && typeof exec?.arguments?.url === 'string'
+      ? `curl ${exec.arguments.url}`
+      : '')
     if (!command) return decision
     const risk = analyzeCommand(command, { allowHosts: cfg.riskAllowHosts })
     if (!risk.risk) return decision
