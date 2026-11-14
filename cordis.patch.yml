@@ -1,0 +1,4 @@
+# dsh-context-guard：工具输出预算/落盘、重复结果去重、只读诊断与压缩归档。
+- insert:
+    - id: context-guard
+      name: dsh-context-guard

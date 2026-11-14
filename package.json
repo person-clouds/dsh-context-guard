@@ -1,0 +1,48 @@
+{
+  "name": "dsh-context-guard",
+  "version": "0.3.0",
+  "type": "module",
+  "description": "DSH 插件：工具输出预算与落盘、重复结果去重、风险命令确认、只读诊断脚本、压缩归档与指标统计。",
+  "exports": {
+    ".": "./index.js"
+  },
+  "files": [
+    "index.js",
+    "lib",
+    "scripts",
+    "cordis.patch.yml",
+    "README.md",
+    "PLAN.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "test": "node test.mjs"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/person-clouds/dsh-context-guard.git"
+  },
+  "homepage": "https://github.com/person-clouds/dsh-context-guard#readme",
+  "bugs": {
+    "url": "https://github.com/person-clouds/dsh-context-guard/issues"
+  },
+  "keywords": [
+    "dsh-plugin",
+    "dsh",
+    "context",
+    "token",
+    "bash",
+    "compaction",
+    "archive",
+    "security",
+    "approval"
+  ],
+  "engines": {
+    "node": ">=22.5.0"
+  }
+}
