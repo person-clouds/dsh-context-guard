@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { name, apply } from './index.js'
 import { budgetFor, classifyCommand, renderBounded } from './lib/budget.js'
+import { DedupCache } from './lib/dedup.js'
 
 // 命令分类与预算
 assert.equal(classifyCommand('cat /var/log/syslog'), 'unbounded')
@@ -86,6 +87,30 @@ const files = await readdir(join(outputDir, 'session-test'))
 assert.equal(files.length, 1)
 const archived = await readFile(join(outputDir, 'session-test', files[0]), 'utf8')
 assert.equal(archived, fullText)
+
+// 去重缓存 TTL
+const cache = new DedupCache({ ttlMs: 10, maxEntries: 2 })
+cache.set('k', { hash: 'h' }, 100)
+assert.equal(cache.get('k', 105)?.hash, 'h')
+assert.equal(cache.get('k', 120), null)
+
+// 相同命令再次执行：不跳过执行，只把重复结果换成指针
+let nextCalls = 0
+const secondExec = { ...exec, callId: 'call-test-2' }
+const duplicate = await handlers.get('tools/post-execute')[0](secondExec, result, async () => {
+  nextCalls++
+  return { kind: 'accept' }
+})
+assert.equal(nextCalls, 1)
+assert.match(duplicate.content[0].text, /\[context-guard:dedup\]/)
+assert.match(duplicate.content[0].text, /call-test-1/)
+
+// 输出变化：只回行级变化块
+const changedResult = { isError: false, content: [{ type: 'text', text: fullText + '\nchanged-line' }] }
+const changedExec = { ...exec, callId: 'call-test-3' }
+const changed = await handlers.get('tools/post-execute')[0](changedExec, changedResult, async () => ({ kind: 'accept' }))
+assert.match(changed.content[0].text, /\[context-guard:diff\]/)
+assert.match(changed.content[0].text, /\+ changed-line/)
 
 // 低于预算保持原决策
 const smallResult = { isError: false, content: [{ type: 'text', text: 'ok' }] }

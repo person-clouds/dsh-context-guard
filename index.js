@@ -8,9 +8,10 @@
 
 import { mkdir, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { commandOf, dshHome, safeName, sessionIdOf, textOf as contentText } from './lib/common.js'
+import { commandOf, dshHome, hashText, safeName, sessionIdOf, textOf as contentText } from './lib/common.js'
 import { budgetFor, classifyCommand, renderBounded } from './lib/budget.js'
 import { writeToolLog } from './lib/archive.js'
+import { DEFAULT_DEDUPE_MIN_CHARS, DedupCache, dedupKey, diffLines } from './lib/dedup.js'
 
 export const name = 'dsh-context-guard'
 
@@ -111,10 +112,14 @@ function guardConfig(config) {
     hardMaxChars: config.hardMaxChars,
     errorBudgetChars: config.errorBudgetChars,
     categoryBudgets: config.categoryBudgets,
+    dedupEnabled: config.dedupEnabled !== false,
+    dedupTtlMs: config.dedupTtlMs,
+    dedupMaxEntries: config.dedupMaxEntries,
+    dedupeMinChars: config.dedupeMinChars,
   }
 }
 
-async function guardToolResult(exec, result, decision, cfg, logger) {
+async function guardToolResult(exec, result, decision, cfg, cache, logger) {
   if (decision.kind !== 'accept') return decision
   if (!cfg.enabled || !cfg.toolNames.includes(exec?.name)) return decision
   if (decision.value !== undefined && !decision.content) return decision
@@ -123,10 +128,53 @@ async function guardToolResult(exec, result, decision, cfg, logger) {
   if (!text) return decision
   const command = commandOf(exec)
   const budget = budgetFor(command, result?.isError, cfg)
-  if (text.length <= budget) return decision
+  const now = Date.now()
+  const sessionId = sessionIdOf(exec)
+  const cacheable = cfg.dedupEnabled && !result?.isError && text.length >= (Number(cfg.dedupeMinChars) || DEFAULT_DEDUPE_MIN_CHARS)
+  const key = cacheable ? dedupKey(sessionId, exec.name, exec.arguments) : null
+
+  if (key) {
+    const previous = cache.get(key, now)
+    if (previous) {
+      const hash = hashText(text)
+      if (previous.hash === hash) {
+        cache.touch(key, now)
+        const pointer = previous.logPath || `call ${previous.callId}`
+        const summary = `[context-guard:dedup] ${exec.name} 输出与 call ${previous.callId} 完全相同（${text.length} chars）\n完整输出: ${pointer}\n[... 重复内容已省略，未重新写入上下文 ...]`
+        return { kind: 'accept', content: [{ type: 'text', text: summary }], ...(decision.additionalContexts ? { additionalContexts: decision.additionalContexts } : {}) }
+      }
+
+      const diff = diffLines(previous.text, text)
+      if (diff) {
+        let logPath = null
+        try {
+          const log = await writeToolLog(cfg.outputDir, sessionId, exec.callId, text)
+          logPath = log.path
+        } catch (error) {
+          logger?.warn?.('context-guard: 增量结果落盘失败: %s', error)
+        }
+        const header = `[context-guard:diff] ${exec.name} 输出与 call ${previous.callId} 不同：-${diff.removedCount} / +${diff.addedCount} 行；类型 ${classifyCommand(command)}\n完整输出: ${logPath || '(落盘失败)'}\n`
+        const footer = '\n[... 仅显示变化块，未变化的上下文已省略 ...]'
+        const summary = renderBounded(diff.summary, {
+          budget,
+          header,
+          footer,
+          headChars: cfg.headChars,
+          tailChars: cfg.tailChars,
+        })
+        cache.set(key, { hash: hashText(text), text, callId: exec.callId, logPath }, now)
+        return { kind: 'accept', content: [{ type: 'text', text: summary }], ...(decision.additionalContexts ? { additionalContexts: decision.additionalContexts } : {}) }
+      }
+    }
+  }
+
+  if (text.length <= budget) {
+    if (key) cache.set(key, { hash: hashText(text), text, callId: exec.callId, logPath: null }, now)
+    return decision
+  }
 
   try {
-    const log = await writeToolLog(cfg.outputDir, sessionIdOf(exec), exec.callId, text)
+    const log = await writeToolLog(cfg.outputDir, sessionId, exec.callId, text)
     const category = classifyCommand(command)
     const header = `[context-guard] ${exec.name} 输出 ${text.length} chars，超过 ${budget} 预算；类型 ${category}${result?.isError ? '；错误结果' : ''}\n完整输出: ${log.path}\n`
     const footer = '\n[... 中间已裁剪，完整内容见上方路径 ...]'
@@ -137,6 +185,7 @@ async function guardToolResult(exec, result, decision, cfg, logger) {
       headChars: cfg.headChars,
       tailChars: cfg.tailChars,
     })
+    if (key) cache.set(key, { hash: hashText(text), text, callId: exec.callId, logPath: log.path }, now)
     return { kind: 'accept', content: [{ type: 'text', text: summary }], ...(decision.additionalContexts ? { additionalContexts: decision.additionalContexts } : {}) }
   } catch (error) {
     logger?.warn?.('context-guard: 工具输出落盘失败，保留原结果: %s', error)
@@ -147,6 +196,7 @@ async function guardToolResult(exec, result, decision, cfg, logger) {
 export function apply(ctx, config = {}) {
   const dir = typeof config.dir === 'string' && config.dir ? config.dir : undefined
   const cfg = guardConfig(config)
+  const cache = new DedupCache({ ttlMs: cfg.dedupTtlMs, maxEntries: cfg.dedupMaxEntries })
 
   ctx.on('session/event', (session, event) => {
     if (event.type === 'compaction/start') {
@@ -167,6 +217,6 @@ export function apply(ctx, config = {}) {
 
   ctx.on('tools/post-execute', async (exec, result, next) => {
     const decision = await next()
-    return guardToolResult(exec, result, decision, cfg, ctx.logger)
+    return guardToolResult(exec, result, decision, cfg, cache, ctx.logger)
   })
 }
