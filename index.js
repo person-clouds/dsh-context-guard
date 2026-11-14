@@ -1,29 +1,25 @@
 /**
- * DSH context guard：把自动压缩前的人工可读上下文和压缩后的结构化摘要写到磁盘。
+ * DSH context guard：工具输出预算/落盘、重复结果去重、只读诊断与压缩归档。
  *
- * 不是替代 compaction，也不额外调用模型：
- * - `compaction/start`：先落一份「压缩前快照」；
- * - `compaction/summary`：用 DSH 自己生成的结构化摘要更新同一份 STATUS.md；
- * - 每次压缩另存一份带时间戳的历史文件。
- *
- * 压缩归档默认目录：$DSH_HOME/compaction-archive/<session-id>/
+ * - `tools/post-execute`：bash 输出超预算时完整落盘，上下文只留 head/tail/路径；
+ * - `session/event`：压缩前写快照，压缩后把 DSH 结构化摘要写成 STATUS.md；
+ * - 不额外调用模型，不改变压缩阈值，写入失败只 warning。
  */
 
 import { mkdir, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { homedir } from 'node:os'
+import { commandOf, dshHome, safeName, sessionIdOf, textOf as contentText } from './lib/common.js'
+import { budgetFor, classifyCommand, renderBounded } from './lib/budget.js'
+import { writeToolLog } from './lib/archive.js'
 
 export const name = 'dsh-context-guard'
 
-function safeName(value) {
-  return String(value).replace(/[^A-Za-z0-9._-]+/g, '_').slice(0, 120) || 'session'
-}
+const DEFAULT_TOOL_NAMES = ['bash', 'persistent-bash', 'terminal-bash']
 
 function textOf(content) {
-  if (!Array.isArray(content)) return ''
-  return content
-    .filter(block => block && block.type === 'text' && typeof block.text === 'string')
-    .map(block => block.text.trim())
+  return contentText(content)
+    .split('\n')
+    .map(line => line.trim())
     .filter(Boolean)
     .join('\n')
 }
@@ -63,7 +59,7 @@ export function snapshotOf(session, limit = 8) {
 
 function renderStatus({ session, snapshot, phase, summary, meta }) {
   const lines = [
-    '# DSH 压缩归档 STATUS',
+    '# DSH 上下文守卫 STATUS',
     '',
     `- 会话：\`${session.id}\``,
     `- 标题：${snapshot.title}`,
@@ -92,7 +88,7 @@ function renderStatus({ session, snapshot, phase, summary, meta }) {
 
 async function writeArchive(session, phase, summary, meta, dir) {
   const snapshot = snapshotOf(session)
-  const root = dir || join(process.env.DSH_HOME || join(homedir(), '.dsh'), 'compaction-archive')
+  const root = dir || join(dshHome(), 'compaction-archive')
   const sessionDir = join(root, safeName(session.id))
   await mkdir(sessionDir, { recursive: true })
   const status = join(sessionDir, 'STATUS.md')
@@ -104,13 +100,59 @@ async function writeArchive(session, phase, summary, meta, dir) {
   return status
 }
 
+function guardConfig(config) {
+  return {
+    enabled: config.enabled !== false,
+    toolNames: Array.isArray(config.toolNames) && config.toolNames.length > 0 ? config.toolNames : DEFAULT_TOOL_NAMES,
+    outputDir: typeof config.outputDir === 'string' && config.outputDir ? config.outputDir : join(dshHome(), 'tool-output'),
+    thresholdChars: config.thresholdChars,
+    headChars: config.headChars,
+    tailChars: config.tailChars,
+    hardMaxChars: config.hardMaxChars,
+    errorBudgetChars: config.errorBudgetChars,
+    categoryBudgets: config.categoryBudgets,
+  }
+}
+
+async function guardToolResult(exec, result, decision, cfg, logger) {
+  if (decision.kind !== 'accept') return decision
+  if (!cfg.enabled || !cfg.toolNames.includes(exec?.name)) return decision
+  if (decision.value !== undefined && !decision.content) return decision
+
+  const text = contentText(decision.content ?? result?.content)
+  if (!text) return decision
+  const command = commandOf(exec)
+  const budget = budgetFor(command, result?.isError, cfg)
+  if (text.length <= budget) return decision
+
+  try {
+    const log = await writeToolLog(cfg.outputDir, sessionIdOf(exec), exec.callId, text)
+    const category = classifyCommand(command)
+    const header = `[context-guard] ${exec.name} 输出 ${text.length} chars，超过 ${budget} 预算；类型 ${category}${result?.isError ? '；错误结果' : ''}\n完整输出: ${log.path}\n`
+    const footer = '\n[... 中间已裁剪，完整内容见上方路径 ...]'
+    const summary = renderBounded(text, {
+      budget,
+      header,
+      footer,
+      headChars: cfg.headChars,
+      tailChars: cfg.tailChars,
+    })
+    return { kind: 'accept', content: [{ type: 'text', text: summary }], ...(decision.additionalContexts ? { additionalContexts: decision.additionalContexts } : {}) }
+  } catch (error) {
+    logger?.warn?.('context-guard: 工具输出落盘失败，保留原结果: %s', error)
+    return decision
+  }
+}
+
 export function apply(ctx, config = {}) {
   const dir = typeof config.dir === 'string' && config.dir ? config.dir : undefined
+  const cfg = guardConfig(config)
+
   ctx.on('session/event', (session, event) => {
     if (event.type === 'compaction/start') {
       void writeArchive(session, '压缩前快照（摘要尚未生成）', '', {
         trigger: event.data?.sourceCommandId ? 'manual' : 'automatic',
-      }, dir).catch(error => ctx.logger?.warn?.('compaction-archive: 写压缩前快照失败: %s', error))
+      }, dir).catch(error => ctx.logger?.warn?.('context-guard: 写压缩前快照失败: %s', error))
       return
     }
     if (event.type !== 'compaction/summary') return
@@ -120,6 +162,11 @@ export function apply(ctx, config = {}) {
       shadowedTokenCount: event.data?.shadowedTokenCount,
       provider: event.data?.provider,
       model: event.data?.model,
-    }, dir).catch(error => ctx.logger?.warn?.('compaction-archive: 写压缩摘要失败: %s', error))
+    }, dir).catch(error => ctx.logger?.warn?.('context-guard: 写压缩摘要失败: %s', error))
+  })
+
+  ctx.on('tools/post-execute', async (exec, result, next) => {
+    const decision = await next()
+    return guardToolResult(exec, result, decision, cfg, ctx.logger)
   })
 }

@@ -1,7 +1,7 @@
 # STATUS — dsh-context-guard
 
 - 更新时间：2026-11-14
-- 一句话：DSH 压缩前落盘上下文快照，压缩后用 DSH 结构化摘要更新 `STATUS.md`。
+- 一句话：DSH 工具输出预算/落盘 + 压缩归档；后续补去重、指标、清理与 inspect.sh。
 - 位置：`task/dsh-context-guard/`；已改名，待更新 profile link。
 
 ## 已完成
@@ -12,7 +12,9 @@
 - [x] 失败仅 warning，不阻塞压缩；
 - [x] `test.mjs` 通过；
 - [x] 发布规范化：`dsh.bundle.patch`、README、PUBLISHING、LICENSE、market 条目、`npm pack --dry-run` 通过；
-- [x] 已更新 `doc/dsh-plugins.md` 与 `PROJECT_INDEX.md`。
+- [x] 已更新 `doc/dsh-plugins.md` 与 `PROJECT_INDEX.md`；
+- [x] `tools/post-execute` 输出预算：默认 3000，按命令类型放宽，完整输出落盘；
+- [x] 写盘失败回退原始结果。
 
 ## 待办
 
@@ -26,7 +28,7 @@
 
 | 时间 | 项 | 结果 |
 |---|---|---|
-| 2026-11-14 | `node test.mjs` | ok；压缩前快照与压缩后摘要均写入 |
+| 2026-11-14 | `node test.mjs` | ok；压缩归档、命令分类、预算裁剪、大输出落盘均通过 |
 | 2026-11-14 | `dsh --profile web --dump-config` | `compaction-archive` 已出现在组合树 |
 | 2026-11-14 | `dsh --profile superagent --dump-config` | 同上 |
 | 2026-11-14 | `npm pack --dry-run` | 5 files / 4.3 kB，通过 |
