@@ -1,8 +1,8 @@
 {
   "name": "dsh-context-guard",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "type": "module",
-  "description": "DSH 插件：工具输出预算与落盘、重复结果去重、只读诊断脚本、压缩归档与指标统计。",
+  "description": "DSH 插件：工具输出预算与落盘、重复结果去重、风险命令确认、只读诊断脚本、压缩归档与指标统计。",
   "exports": {
     ".": "./index.js"
   },
@@ -38,7 +38,9 @@
     "token",
     "bash",
     "compaction",
-    "archive"
+    "archive",
+    "security",
+    "approval"
   ],
   "engines": {
     "node": ">=22.5.0"

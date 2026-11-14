@@ -14,6 +14,7 @@ import { writeToolLog } from './lib/archive.js'
 import { DEFAULT_DEDUPE_MIN_CHARS, DedupCache, dedupKey, diffLines } from './lib/dedup.js'
 import { MetricsRecorder, metricOf } from './lib/metrics.js'
 import { cleanupOutputs } from './lib/cleanup.js'
+import { analyzeCommand, riskAskDecision } from './lib/risk.js'
 
 export const name = 'dsh-context-guard'
 
@@ -104,9 +105,13 @@ async function writeArchive(session, phase, summary, meta, dir) {
 }
 
 function guardConfig(config) {
+  const toolNames = Array.isArray(config.toolNames) && config.toolNames.length > 0 ? config.toolNames : DEFAULT_TOOL_NAMES
   return {
     enabled: config.enabled !== false,
-    toolNames: Array.isArray(config.toolNames) && config.toolNames.length > 0 ? config.toolNames : DEFAULT_TOOL_NAMES,
+    toolNames,
+    riskCheckEnabled: config.riskCheckEnabled !== false,
+    riskToolNames: Array.isArray(config.riskToolNames) && config.riskToolNames.length > 0 ? config.riskToolNames : toolNames,
+    riskAllowHosts: Array.isArray(config.riskAllowHosts) ? config.riskAllowHosts : undefined,
     outputDir: typeof config.outputDir === 'string' && config.outputDir ? config.outputDir : join(dshHome(), 'tool-output'),
     thresholdChars: config.thresholdChars,
     headChars: config.headChars,
@@ -261,6 +266,18 @@ export function apply(ctx, config = {}) {
       provider: event.data?.provider,
       model: event.data?.model,
     }, dir).catch(error => ctx.logger?.warn?.('context-guard: 写压缩摘要失败: %s', error))
+  })
+
+  ctx.on('tools/pre-execute', async (exec, next) => {
+    const decision = await next()
+    if (decision.kind !== 'allow') return decision
+    if (!cfg.enabled || !cfg.riskCheckEnabled || !cfg.riskToolNames.includes(exec?.name)) return decision
+    const command = commandOf(exec)
+    if (!command) return decision
+    const risk = analyzeCommand(command, { allowHosts: cfg.riskAllowHosts })
+    if (!risk.risk) return decision
+    ctx.logger?.info?.('context-guard: 风险命令待确认 (%s): %s', risk.level, risk.preview)
+    return riskAskDecision(risk)
   })
 
   ctx.on('tools/post-execute', async (exec, result, next) => {
