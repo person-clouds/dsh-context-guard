@@ -20,6 +20,7 @@
 - [x] 清理：7 天保留、单会话 50MB/300 文件、全局 500MB，删除最旧文件，保留当前会话最近 3 个；
 - [x] `scripts/inspect.sh`：overview/service/app/logs/git/ports/docker/http/report，只读、有界输出、可选 linuxops 只读子命令；
 - [x] `tools/pre-execute` 风险命令警示：删除/仓库删除、git 强推/重置、下载执行、未知链接（含 `web_fetch`）、关机停服、容器/数据库删除、提权等返回 `ask` 让用户确认；不覆盖已有 deny/cancel/ask。
+- [x] linuxops 可选安装方案：不安装自动回退、插件只读兼容层、通过 `--binary` 接入自建/上游二进制；安装脚本不 sudo、不自动改 PATH；
 
 ## 待办
 
@@ -43,3 +44,4 @@
 | 2026-11-14 | `awesome-dsh-plugin` PR | 已创建 #15266，等待仓库年龄门槛后的自动重跑 |
 | 2026-11-14 | npm Registry | `@fenghoer/dsh-context-guard@0.3.0` 可查询 |
 | 2026-11-14 | `scripts/apply-profile.sh` 临时 HOME 连跑两次 | 迁移正确且无重复条目 |
+| 2026-11-14 | `scripts/install-linuxops.sh` 临时 HOME 安装/卸载 | 兼容层可执行，`inspect.sh overview` 通过 `LINUXOPS_BIN` 联调成功 |
