@@ -14,7 +14,17 @@ DSH Host-only 插件：把长工具输出挡在上下文之外，同时保留完
 
 ## 安装
 
+从 GitHub Release 安装（推荐，无需构建）：
+
 ```bash
+dsh plugin --profile web add https://github.com/person-clouds/dsh-context-guard/releases/latest/download/dsh-context-guard.tgz
+```
+
+也可以从 npm 或本地源码安装：
+
+```bash
+dsh plugin --profile web add @fenghoer/dsh-context-guard
+# 或
 dsh plugin --profile web add link:/home/zh/www/personalCloud/task/dsh-context-guard
 ```
 
@@ -123,7 +133,7 @@ task/dsh-context-guard/scripts/inspect.sh report
 ```yaml
 - insert:
     - id: context-guard
-      name: dsh-context-guard
+      name: '@fenghoer/dsh-context-guard'
       config:
         thresholdChars: 3000
         headChars: 1200

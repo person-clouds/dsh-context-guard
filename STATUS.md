@@ -26,8 +26,8 @@
 | # | 事项 | 说明 |
 |---|---|---|
 | 1 | ~~创建公开 GitHub 仓库 `person-clouds/dsh-context-guard`~~ | 已创建：https://github.com/person-clouds/dsh-context-guard |
-| 2 | 发布 npm `dsh-context-guard@0.3.0` | 需 npm 登录 |
-| 3 | 提交 awesome-dsh-plugin 市场条目 | 仓库满 1 天后 |
+| 2 | 发布 npm `@fenghoer/dsh-context-guard@0.3.0` | 已执行发布，npm 返回 `202`，Registry 暂时仍 404；GitHub Release tarball 可用 |
+| 3 | 提交 awesome-dsh-plugin 市场条目 | 已提交 PR https://github.com/awesome-dsh-plugin/awesome-dsh-plugin/pull/15266；仓库创建未满 1 天，等待 CI 自动重跑 |
 | 4 | 宿主机执行 `scripts/apply-profile.sh` 并重启 web/superagent | 沙箱对 `~/.dsh` 只读 |
 | 5 | 用真实长输出验证 `maxOutputChars` 与落盘完整性 | 需重启 DSH |
 
@@ -38,5 +38,7 @@
 | 2026-11-14 | `node test.mjs` | ok；压缩归档、预算裁剪、落盘、去重、diff、指标、清理、风险命令识别与 `ask` 门禁、inspect.sh 语法/帮助均通过 |
 | 2026-11-14 | `dsh --profile web --dump-config` | `compaction-archive` 已出现在组合树 |
 | 2026-11-14 | `dsh --profile superagent --dump-config` | 同上 |
-| 2026-11-14 | `npm pack --dry-run --cache /tmp/npm-cache` | 14 files / 17.5 kB，通过 |
+| 2026-11-14 | `npm pack --dry-run --cache /tmp/npm-cache` | 15 files / 21.2 kB，通过 |
+| 2026-11-14 | GitHub Release `v0.3.0` | `dsh-context-guard.tgz` 已上传，latest/download 返回 200 |
+| 2026-11-14 | `awesome-dsh-plugin` PR | 已创建 #15266，等待仓库年龄门槛后的自动重跑 |
 | 2026-11-14 | `scripts/apply-profile.sh` 临时 HOME 连跑两次 | 迁移正确且无重复条目 |
