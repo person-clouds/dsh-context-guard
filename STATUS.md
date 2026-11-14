@@ -17,7 +17,8 @@
 - [x] 写盘失败回退原始结果；
 - [x] 去重缓存：session+tool+args，TTL 10 分钟；相同结果只回指针；变化结果只回行级 diff；从不跳过命令执行；
 - [x] 指标：`context-guard/metrics/<session>.jsonl` + `STATUS.md` 汇总，token 按 `chars/4` 估算；
-- [x] 清理：7 天保留、单会话 50MB/300 文件、全局 500MB，删除最旧文件，保留当前会话最近 3 个。
+- [x] 清理：7 天保留、单会话 50MB/300 文件、全局 500MB，删除最旧文件，保留当前会话最近 3 个；
+- [x] `scripts/inspect.sh`：overview/service/app/logs/git/ports/docker/http/report，只读、有界输出、可选 linuxops 只读子命令。
 
 ## 待办
 
@@ -31,7 +32,7 @@
 
 | 时间 | 项 | 结果 |
 |---|---|---|
-| 2026-11-14 | `node test.mjs` | ok；压缩归档、命令分类、预算裁剪、落盘、去重、diff、指标与过期清理均通过 |
+| 2026-11-14 | `node test.mjs` | ok；压缩归档、预算裁剪、落盘、去重、diff、指标、清理、inspect.sh 语法/帮助均通过 |
 | 2026-11-14 | `dsh --profile web --dump-config` | `compaction-archive` 已出现在组合树 |
 | 2026-11-14 | `dsh --profile superagent --dump-config` | 同上 |
 | 2026-11-14 | `npm pack --dry-run` | 5 files / 4.3 kB，通过 |

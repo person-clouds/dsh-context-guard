@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { spawnSync } from 'node:child_process'
 import { mkdir, mkdtemp, readFile, readdir, utimes, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -138,5 +139,13 @@ const smallResult = { isError: false, content: [{ type: 'text', text: 'ok' }] }
 const same = await handlers.get('tools/post-execute')[0](exec, smallResult, async () => ({ kind: 'accept' }))
 assert.equal(same.kind, 'accept')
 assert.equal(same.content, undefined)
+
+// inspect.sh 语法与帮助
+const inspect = new URL('./scripts/inspect.sh', import.meta.url).pathname
+assert.equal(spawnSync('bash', ['-n', inspect]).status, 0)
+const help = spawnSync('bash', [inspect, '--help'], { encoding: 'utf8' })
+assert.equal(help.status, 0)
+assert.match(help.stdout, /overview/)
+assert.match(help.stdout, /report/)
 
 console.log('ok')
