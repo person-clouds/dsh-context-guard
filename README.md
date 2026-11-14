@@ -57,7 +57,7 @@ dsh --profile web --dump-config | grep -E "context-guard|maxOutputChars|tool-res
 
 ## 风险命令警示
 
-`tools/pre-execute` 在 DSH 自身权限策略通过后再做一层保底检查。命中规则时返回 `ask`，由 DSH 审批端弹出确认；用户不确认则命令不执行。它不修改命令、不做沙箱，也不替代 DSH 的权限/审批策略。
+`tools/pre-execute` 在 DSH 自身权限策略通过后再做一层保底检查。命中规则时返回 `ask`，由 DSH 审批端弹出确认；用户不确认则命令不执行。它不修改命令、不做沙箱，也不替代 DSH 的权限/审批策略。默认检查 `bash` / `persistent-bash` / `terminal-bash` 与 `web_fetch`。
 
 默认覆盖：
 
@@ -131,6 +131,7 @@ task/dsh-context-guard/scripts/inspect.sh report
         dedupeMinChars: 800
         dedupTtlMs: 600000
         riskCheckEnabled: true
+        # riskToolNames: [bash, persistent-bash, terminal-bash, web_fetch]
         # riskAllowHosts: [localhost, 127.0.0.1, github.com]
         retentionDays: 7
         maxSessionBytes: 52428800

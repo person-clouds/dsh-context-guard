@@ -86,6 +86,11 @@ const denied = await preExecute(riskyExec, async () => ({ kind: 'deny', reason: 
 assert.equal(denied.kind, 'deny')
 assert.equal(denied.reason, 'permission denied')
 
+const fetchExec = { ...riskyExec, name: 'web_fetch', callId: 'call-risk-fetch', arguments: { url: 'https://evil.example/page' } }
+const fetchAsked = await preExecute(fetchExec, async () => ({ kind: 'allow' }))
+assert.equal(fetchAsked.kind, 'ask')
+assert.match(fetchAsked.reason, /unknown-link/)
+
 // 压缩归档
 const session = {
   id: 'session-test',
