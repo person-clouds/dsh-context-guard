@@ -128,6 +128,55 @@ task/dsh-context-guard/scripts/inspect.sh report
 
 本机私有扩展放 `~/.dsh/context-guard/inspect.local.sh`，不随插件发布。
 
+## linuxops（可选）
+
+`inspect.sh` 不依赖 `linuxops`：未安装时会自动回退到 `systemctl`、`journalctl`、`ss`、`uname`、`free`、`df`。如果想统一输出格式，可以三选一。
+
+| 方案 | 适合谁 | 命令 |
+|---|---|---|
+| A. 不安装 | 只想用系统自带命令 | 无需操作；`inspect.sh` 自动回退 |
+| B. 插件只读兼容层 | 没有上游二进制，想直接获得统一输出 | `task/dsh-context-guard/scripts/install-linuxops.sh` |
+| C. 安装自建/上游二进制 | 已按上游 README 构建或下载了可信的 `linuxops` | `task/dsh-context-guard/scripts/install-linuxops.sh --binary /path/to/linuxops` |
+
+方案 B 安装的是本插件自带的只读兼容层，**不是上游 linuxops 项目**。它只实现 `inspect.sh` 用到的四个接口：
+
+```text
+linuxops sysinfo
+linuxops service status --name <unit>
+linuxops service logs --name <unit> --lines <n>
+linuxops network ports
+```
+
+安装、验证与卸载：
+
+```bash
+# 安装到 ~/.local/bin/linuxops（不需要 sudo）
+task/dsh-context-guard/scripts/install-linuxops.sh
+
+# 不在 PATH 时按提示加入，或直接显式指定
+export PATH="$HOME/.local/bin:$PATH"
+linuxops --version
+LINUXOPS_BIN="$HOME/.local/bin/linuxops" task/dsh-context-guard/scripts/inspect.sh overview
+
+# 覆盖重装 / 卸载
+task/dsh-context-guard/scripts/install-linuxops.sh --force
+task/dsh-context-guard/scripts/install-linuxops.sh --uninstall
+```
+
+方案 C 的构建步骤以你选择的 linuxops 上游 README 为准；构建完成后把二进制交给安装脚本，插件不复制、不覆盖上游源码：
+
+```bash
+# 示例：先在你信任的源码目录构建，产物为 ./linuxops
+task/dsh-context-guard/scripts/install-linuxops.sh --binary ./linuxops --force
+LINUXOPS_BIN="$HOME/.local/bin/linuxops" task/dsh-context-guard/scripts/inspect.sh report
+```
+
+注意：
+
+- `inspect.sh` 只调用上面的只读子命令；上游 linuxops 如果接口不同，请使用 `LINUXOPS_BIN` 指向兼容的二进制，或选择方案 A。
+- 兼容层和安装脚本都不使用 `sudo`、不写系统、不启停服务。
+- 兼容层不是安全边界；它只是把系统命令的输出格式统一，权限仍由运行用户决定。
+
 ## 配置示例
 
 ```yaml
@@ -163,4 +212,4 @@ cd task/dsh-context-guard && npm test
 - 去重不跨进程持久化；
 - 风险检查是启发式保底，不是安全沙箱；`ask` 由 DSH 审批服务裁决，无审批端时按 DSH 规则拒绝；
 - 不做写操作诊断（kill、重启、cron、备份恢复等）；
-- linuxops 不打包，只作为可选本机工具。
+- linuxops 不随包自动安装；可用 `scripts/install-linuxops.sh` 安装可选只读兼容层，或通过 `LINUXOPS_BIN` 接入自建二进制。

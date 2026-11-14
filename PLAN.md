@@ -18,7 +18,7 @@
 
 - 不硬性限制单轮 bash 调用次数；
 - 不跳过命令执行做“执行缓存”（持久 shell 有 cwd/env 状态，风险高）；
-- 不把 linuxops 打进插件发布包；
+- 不打包上游 linuxops；提供可选只读兼容层，但绝不自动安装；
 - 不替代 DSH 自动压缩；
 - 风险检查只做正则启发式保底，不充当安全沙箱；
 - 不提供写操作诊断（重启、kill、cron、备份恢复等一律不做）。
@@ -32,6 +32,8 @@ task/dsh-context-guard/
 ├── index.js              # Host 插件入口
 ├── lib/                  # 预算、去重、落盘、指标、清理、风险识别
 ├── scripts/inspect.sh    # 只读固定调查脚本
+├── scripts/install-linuxops.sh  # 可选安装兼容层/自建二进制
+├── scripts/linuxops-shim.sh     # 只读兼容层
 ├── test.mjs              # 无外部依赖测试
 ├── README.md
 ├── PLAN.md
@@ -106,6 +108,7 @@ ${DSH_HOME:-$HOME/.dsh}/context-guard/metrics/<session-id>.jsonl
 
 - 每段有行数/字节上限；
 - 有 `linuxops` 时仅使用只读子命令，没有则回退系统命令；
+- 安装三选一：不安装、插件只读兼容层、自建/上游二进制（`--binary`）；
 - 不包含 cloudctl；本机扩展放 `~/.dsh/context-guard/inspect.local.sh`，不发布；
 - 不自动 sudo，不执行写操作。
 

@@ -196,4 +196,28 @@ assert.equal(help.status, 0)
 assert.match(help.stdout, /overview/)
 assert.match(help.stdout, /report/)
 
+// linuxops 可选兼容层：语法、安装、版本与 inspect.sh 联调
+const shim = new URL('./scripts/linuxops-shim.sh', import.meta.url).pathname
+const installer = new URL('./scripts/install-linuxops.sh', import.meta.url).pathname
+assert.equal(spawnSync('sh', ['-n', shim]).status, 0)
+assert.equal(spawnSync('bash', ['-n', installer]).status, 0)
+const shimVersion = spawnSync('sh', [shim, '--version'], { encoding: 'utf8' })
+assert.equal(shimVersion.status, 0)
+assert.match(shimVersion.stdout, /linuxops-compat/)
+const fakeHome = await mkdtemp(join(tmpdir(), 'linuxops-home-'))
+const installed = spawnSync('bash', [installer], {
+  encoding: 'utf8',
+  env: { ...process.env, HOME: fakeHome, DSH_HOME: join(fakeHome, '.dsh') },
+})
+assert.equal(installed.status, 0, installed.stderr)
+const fakeLinuxops = join(fakeHome, '.local', 'bin', 'linuxops')
+assert.equal(spawnSync(fakeLinuxops, ['--version'], { encoding: 'utf8' }).status, 0)
+const fallbackOverview = spawnSync('bash', [inspect, 'overview'], {
+  encoding: 'utf8',
+  env: { ...process.env, HOME: fakeHome, DSH_HOME: join(fakeHome, '.dsh'), LINUXOPS_BIN: fakeLinuxops },
+})
+assert.equal(fallbackOverview.status, 0, fallbackOverview.stderr)
+assert.match(fallbackOverview.stdout, /## 系统/)
+assert.match(fallbackOverview.stdout, /kernel:/)
+
 console.log('ok')
