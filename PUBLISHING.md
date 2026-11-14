@@ -1,6 +1,6 @@
 # 发布到 DSH 插件市场
 
-> 状态：**已发布 GitHub Release `v0.3.0`；已提交 awesome-dsh-plugin PR #15266；npm 发布返回 202 但 Registry 仍 404。**
+> 状态：**npm `@fenghoer/dsh-context-guard@0.3.0` 已发布；GitHub Release `v0.3.0` 已发布；awesome-dsh-plugin PR #15266 已提交（等待仓库满 1 天的 CI 自动重跑）。**
 > 目标仓库：`person-clouds/dsh-context-guard`
 > npm 包名：`@fenghoer/dsh-context-guard`（npm 上 `dsh-context-guard` 已被其他项目占用）
 
