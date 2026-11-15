@@ -1,6 +1,6 @@
 # 发布到 DSH 插件市场
 
-> 状态：**npm `@fenghoer/dsh-context-guard@0.3.0` 已发布；GitHub Release `v0.3.0` 已发布；awesome-dsh-plugin PR #15266 已提交（等待仓库满 1 天的 CI 自动重跑）。**
+> 状态：**npm `@fenghoer/dsh-context-guard@0.3.1` 已发布；GitHub Release `v0.3.1` 已发布；awesome-dsh-plugin PR #15266 已提交（等待仓库满 1 天的 CI 自动重跑）。**
 > 目标仓库：`person-clouds/dsh-context-guard`
 > npm 包名：`@fenghoer/dsh-context-guard`（npm 上 `dsh-context-guard` 已被其他项目占用）
 
@@ -13,6 +13,7 @@ task/dsh-context-guard/
 ├── index.js              # Host-only 插件
 ├── test.mjs              # 无外部依赖的单元测试
 ├── README.md
+├── README.en.md
 ├── PUBLISHING.md
 ├── LICENSE
 └── market/person-clouds__dsh-context-guard.yml
@@ -38,7 +39,7 @@ GitHub 仓库添加 topic：`dsh-plugin`。
 cd /home/zh/www/personalCloud/task/dsh-context-guard
 npm test
 npm pack --pack-destination release
-# 产物：release/dsh-context-guard-0.3.0.tgz
+# 产物：release/dsh-context-guard-0.3.1.tgz
 ```
 
 ## 三、发布 npm（需要先登录）
@@ -50,7 +51,7 @@ npm publish --registry=https://registry.npmjs.org --access public
 
 ## 四、创建 GitHub Release
 
-- tag：`v0.3.0`
+- tag：`v0.3.1`
 - 上传 `dsh-context-guard.tgz`（源码 tarball，无版本号文件名）
 - Release 资源名建议保持无版本号：`dsh-context-guard.tgz`
 
