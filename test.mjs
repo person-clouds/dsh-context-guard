@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
-import { mkdir, mkdtemp, readFile, readdir, utimes, writeFile } from 'node:fs/promises'
+import { access, mkdir, mkdtemp, readFile, readdir, utimes, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { name, apply } from './index.js'
@@ -116,6 +116,29 @@ status = await readFile(join(dir, 'session-test', 'STATUS.md'), 'utf8')
 assert.match(status, /压缩完成/)
 assert.match(status, /## Primary Request/)
 assert.match(status, /约 12345 token/)
+
+// 默认归档目录：${DSH_HOME}/context-guard/archive（不再写旧 compaction-archive）
+const defaultDshHome = await mkdtemp(join(tmpdir(), 'dsh-context-guard-home-'))
+const previousDshHome = process.env.DSH_HOME
+process.env.DSH_HOME = defaultDshHome
+try {
+  const defaultHandlers = new Map()
+  apply({
+    on(type, fn) {
+      if (!defaultHandlers.has(type)) defaultHandlers.set(type, [])
+      defaultHandlers.get(type).push(fn)
+    },
+    logger: { warn() {} },
+  }, { cleanupEnabled: false })
+  await defaultHandlers.get('session/event')[0](session, { type: 'compaction/start', data: { turn: 1 } })
+  await new Promise(resolve => setTimeout(resolve, 30))
+  const defaultStatus = await readFile(join(defaultDshHome, 'context-guard', 'archive', 'session-test', 'STATUS.md'), 'utf8')
+  assert.match(defaultStatus, /压缩前快照/)
+  await assert.rejects(access(join(defaultDshHome, 'compaction-archive')), /ENOENT/)
+} finally {
+  if (previousDshHome === undefined) delete process.env.DSH_HOME
+  else process.env.DSH_HOME = previousDshHome
+}
 
 // 大输出落盘 + 有界摘要
 const fullText = Array.from({ length: 2000 }, (_, index) => `line-${index}-${'x'.repeat(20)}`).join('\n')
