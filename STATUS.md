@@ -7,7 +7,7 @@
 ## 已完成
 
 - [x] Host-only 插件：监听 `compaction/start` / `compaction/summary`；
-- [x] 输出 `~/.dsh/compaction-archive/<session-id>/STATUS.md`（路径保持兼容） 与带时间戳历史文件；
+- [x] 输出 `~/.dsh/context-guard/archive/<session-id>/STATUS.md` 与带时间戳历史文件；
 - [x] 不额外调用模型，不改变压缩阈值；
 - [x] 失败仅 warning，不阻塞压缩；
 - [x] `test.mjs` 通过；

@@ -46,7 +46,7 @@ task/dsh-context-guard/
 默认数据目录：
 
 ```text
-${DSH_HOME:-$HOME/.dsh}/compaction-archive/<session-id>/STATUS.md   # 原归档，保持兼容
+${DSH_HOME:-$HOME/.dsh}/context-guard/archive/<session-id>/STATUS.md
 ${DSH_HOME:-$HOME/.dsh}/tool-output/<session-id>/<time>-<call-id>.log
 ${DSH_HOME:-$HOME/.dsh}/context-guard/metrics/<session-id>.jsonl
 ```

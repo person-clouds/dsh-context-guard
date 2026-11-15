@@ -99,7 +99,7 @@ Default host allowlist: `localhost`, `127.0.0.1`, `[::1]`, `github.com`, `gitee.
 ${DSH_HOME:-$HOME/.dsh}/tool-output/<session-id>/<timestamp>-<call-id>.log
 ${DSH_HOME:-$HOME/.dsh}/context-guard/metrics/<session-id>.jsonl
 ${DSH_HOME:-$HOME/.dsh}/context-guard/metrics/STATUS.md
-${DSH_HOME:-$HOME/.dsh}/compaction-archive/<session-id>/STATUS.md
+${DSH_HOME:-$HOME/.dsh}/context-guard/archive/<session-id>/STATUS.md
 ```
 
 Cleanup: retain 7 days; 50 MB / 300 files per session; 500 MB total; delete oldest files; keep the 3 most recent files for the current session. Directories are 0700 and files 0600.
