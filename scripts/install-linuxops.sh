@@ -3,6 +3,7 @@
 # 默认只写用户目录，不需要 sudo。
 set -euo pipefail
 
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 PREFIX="${HOME:-/home/zh}/.local/bin"
 FORCE=0
 UNINSTALL=0
@@ -60,7 +61,7 @@ if [ -n "$BINARY" ]; then
   install -m 0755 -- "$BINARY" "$TARGET"
   echo "已安装用户提供的二进制到 $TARGET"
 else
-  SRC="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/linuxops-shim.sh"
+  SRC="$SCRIPT_DIR/linuxops-shim.sh"
   [ -f "$SRC" ] || { echo "缺少兼容层脚本：$SRC" >&2; exit 1; }
   install -m 0755 -- "$SRC" "$TARGET"
   echo "已安装只读兼容层到 $TARGET"
@@ -72,4 +73,4 @@ case ":$PATH:" in
 esac
 
 "$TARGET" --version 2>/dev/null || true
-echo "验证：LINUXOPS_BIN=$TARGET scripts/inspect.sh overview"
+echo "验证：LINUXOPS_BIN=$TARGET $SCRIPT_DIR/inspect.sh overview"

@@ -1,3 +1,5 @@
+[中文](README.md) | [English](README.en.md)
+
 # dsh-context-guard
 
 DSH Host-only 插件：把长工具输出挡在上下文之外，同时保留完整证据。
