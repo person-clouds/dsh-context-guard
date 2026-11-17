@@ -6,13 +6,15 @@ DSH Host-only 插件：把长工具输出挡在上下文之外，同时保留完
 
 解决的问题：长会话里 `bash` 输出（`ls -la`、整文件 `cat`、`journalctl`、重复的 `curl` 轮询）会被反复计费；DSH 官方 persistent-bash 默认还会在 16,000 字符处截断，导致落盘也不完整。
 
-本插件做五件事：
+本插件做七件事：
 
 1. **有界摘要**：输出超过预算时，完整文本写盘，上下文只保留 head/tail、命令类型和文件路径；
 2. **去重**：同一 session + tool + args 在 10 分钟内结果相同，只回上一次 call 的指针；结果变化只回行级 diff；
-3. **只读诊断**：`scripts/inspect.sh` 用固定模式替代零散命令；
-4. **风险命令确认**：`rm -rf`、`git reset --hard`、`curl | bash`、未知链接、提权等执行前发警示，交给 DSH 审批端让用户确认；
-5. **压缩归档 + 指标 + 清理**：压缩前后写 `STATUS.md`，统计节省量，按保留期和配额清磁盘。
+3. **单轮调用门禁**：单轮 bash 第 21 次起 `ask` 一次，第 40 次起 `deny`；
+4. **单轮累计输出门禁**：本轮累计进入上下文超过 40KB 后，后续超过 800 字符的结果只回摘要 + 落盘路径；
+5. **命令形态提示**：整文件 `cat`、无排除的家目录递归搜索、裸 `curl` API 返回 `ask` 并给替代命令；
+6. **只读诊断**：`scripts/inspect.sh` 用固定模式替代零散命令；
+7. **风险确认 + 压缩归档 + 指标 + 清理**：风险命令执行前确认；压缩前后写 `STATUS.md`，统计节省量，按保留期和配额清磁盘。
 
 ## 安装
 
@@ -30,7 +32,7 @@ dsh plugin --profile web add @fenghoer/dsh-context-guard
 dsh plugin --profile web add link:/home/zh/www/personalCloud/task/dsh-context-guard
 ```
 
-然后执行宿主机迁移脚本（会备份 profile）：
+然后执行宿主机迁移脚本（会先检查包已安装、备份 profile）：
 
 ```bash
 task/dsh-context-guard/scripts/apply-profile.sh
@@ -38,9 +40,9 @@ task/dsh-context-guard/scripts/apply-profile.sh
 
 脚本做三件事：
 
-- 把旧的 `compaction-archive` 插入项改成 `context-guard`；
-- 给 `persistent-bash` 加 `maxOutputChars: 65536`，否则插件只能拿到被截断的 16K；
-- 给官方 `tool-result-pruner` 设置 8192/4096/1024。
+- 把旧的 `compaction-archive` 插入项改成 `context-guard`，并修正为 scoped 包名 `@fenghoer/dsh-context-guard`；如果对应 profile 的 `node_modules/@fenghoer/dsh-context-guard` 不存在，会提示先执行 `dsh plugin --profile <p> add link:...` 并以非零退出；
+- 把 `persistent-bash` 的 `maxOutputChars` 对齐为 `65536`，否则插件只能拿到被截断的 16K；
+- 把官方 `tool-result-pruner` 对齐为 `6000/3000/1500`。
 
 验证：
 
@@ -50,20 +52,27 @@ dsh --profile web --dump-config | grep -E "context-guard|maxOutputChars|tool-res
 
 ## 输出预算
 
-默认 `thresholdChars=3000`、`headChars=1200`、`tailChars=800`，硬顶 12000。
+默认 `thresholdChars=2000`、`headChars=1200`、`tailChars=800`，硬顶 6000。
 
 | 命令类型 | 示例 | 预算 |
 |---|---|---:|
-| 默认 | 普通 bash | 3000 |
-| 快速状态 | `ps`、`df`、`free`、`ss`、`systemctl status` | 2500 |
-| 有界日志 | `journalctl --since`、`tail`、`docker logs --tail` | 4000 |
-| 有界源码 | `sed -n`、`rg`、`grep`、`git show` | 5000 |
-| diff | `git diff` | 6000 |
-| 构建/测试 | `npm test`、`go test`、`pytest` | 8000 |
-| 错误结果 | 非零退出 | 至少 4000 |
-| 显式声明 | 首行 `# dsh-budget=8000` | 最高 12000 |
+| 默认 | 普通 bash | 2000 |
+| 快速状态 | `ps`、`df`、`free`、`ss`、`systemctl status` | 1500 |
+| 有界日志 | `journalctl --since`、`tail`、`docker logs --tail` | 2500 |
+| 有界源码 | `sed -n`、`rg`、`grep`、`git show` | 3000 |
+| diff | `git diff` | 3000 |
+| 构建/测试 | `npm test`、`go test`、`pytest` | 3000 |
+| 错误结果 | 非零退出 | 至少 2500 |
+| 显式声明 | 首行 `# dsh-budget=8000` | 最高 6000 |
 
-无界命令（`cat`、没有 `--since`/`-n` 的 `journalctl`、`find /`、`du /`）压到 2500，并提示改用有界命令。
+无界命令（`cat`、没有 `--since`/`-n` 的 `journalctl`、`find /`、`du /`）压到 1500，并提示改用有界命令。
+
+## 单轮门禁与命令提示
+
+- 调用门禁：同一轮第 21 次 bash 返回一次 `ask`，同一轮不重复弹；第 40 次起 `deny`。监听 `session/event` 的 `turn/start` 清零；缺少该事件时退化为按 session 计数并记 warning。
+- 累计输出门禁：本轮实际进入上下文的字符数超过 `maxTurnOutputChars=40000` 后，后续超过 `exhaustedOutputChars=800` 的结果完整落盘，上下文只留 800 字符以内摘要 + 路径。
+- 命令提示：整文件 `cat` 建议 `sed -n '1,120p'` / `rg -n`；无排除递归搜索 `~/.dsh` 或家目录建议加 `--glob '!**/node_modules/**'`；裸 `curl .../api/...` 建议 `| jq '{field1,field2}'` 或 `-o /tmp/out.json` 后再查询。
+- 命令提示与风险规则同时命中时合并成一个 `ask`，不会一次调用弹两次；已有 `deny`/`cancel` 优先。
 
 写盘失败时回退原始结果，不丢证据。
 
@@ -186,9 +195,15 @@ LINUXOPS_BIN="$HOME/.local/bin/linuxops" task/dsh-context-guard/scripts/inspect.
     - id: context-guard
       name: '@fenghoer/dsh-context-guard'
       config:
-        thresholdChars: 3000
+        thresholdChars: 2000
         headChars: 1200
         tailChars: 800
+        hardMaxChars: 6000
+        maxCallsPerTurn: 20
+        hardMaxCallsPerTurn: 40
+        maxTurnOutputChars: 40000
+        exhaustedOutputChars: 800
+        commandLintEnabled: true
         dedupeMinChars: 800
         dedupTtlMs: 600000
         riskCheckEnabled: true
@@ -206,7 +221,7 @@ LINUXOPS_BIN="$HOME/.local/bin/linuxops" task/dsh-context-guard/scripts/inspect.
 cd task/dsh-context-guard && npm test
 ```
 
-测试覆盖：压缩归档、命令分类/预算、有界渲染、大输出落盘、去重、行级 diff、指标、过期清理、风险命令识别与 `ask` 门禁、`inspect.sh` 语法与帮助。
+测试覆盖：压缩归档、命令分类/预算、有界渲染、大输出落盘、去重、行级 diff、单轮调用与累计输出门禁、命令形态提示与合并 `ask`、指标、过期清理、风险命令识别、`inspect.sh` 语法与帮助。
 
 ## 边界
 

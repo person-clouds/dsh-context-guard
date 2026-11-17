@@ -15,6 +15,8 @@ import { DEFAULT_DEDUPE_MIN_CHARS, DedupCache, dedupKey, diffLines } from './lib
 import { MetricsRecorder, metricOf } from './lib/metrics.js'
 import { cleanupOutputs } from './lib/cleanup.js'
 import { analyzeCommand, riskAskDecision } from './lib/risk.js'
+import { lintAskDecision, lintCommand } from './lib/command-lint.js'
+import { TurnBudget } from './lib/turn-budget.js'
 
 export const name = 'dsh-context-guard'
 
@@ -114,6 +116,11 @@ function guardConfig(config) {
       ? config.riskToolNames
       : [...new Set([...toolNames, 'web_fetch'])],
     riskAllowHosts: Array.isArray(config.riskAllowHosts) ? config.riskAllowHosts : undefined,
+    commandLintEnabled: config.commandLintEnabled !== false,
+    maxCallsPerTurn: Number(config.maxCallsPerTurn) || 20,
+    hardMaxCallsPerTurn: Number(config.hardMaxCallsPerTurn) || 40,
+    maxTurnOutputChars: Number(config.maxTurnOutputChars) || 40000,
+    exhaustedOutputChars: Number(config.exhaustedOutputChars) || 800,
     outputDir: typeof config.outputDir === 'string' && config.outputDir ? config.outputDir : join(dshHome(), 'tool-output'),
     thresholdChars: config.thresholdChars,
     headChars: config.headChars,
@@ -150,7 +157,38 @@ function maybeCleanup(cfg, currentSession, logger) {
     .catch(error => logger?.warn?.('context-guard: 清理工具输出失败: %s', error))
 }
 
-async function guardToolResult(exec, result, decision, cfg, cache, metrics, logger) {
+function mergeAskDecisions(decisions) {
+  if (decisions.length === 1) return decisions[0]
+  return {
+    kind: 'ask',
+    reason: decisions.map(item => item.reason).join('; '),
+    displayReason: {
+      en: decisions.map(item => item.displayReason?.en || item.reason).join('\n\n'),
+      zh: decisions.map(item => item.displayReason?.zh || item.reason).join('\n\n'),
+    },
+  }
+}
+
+function callLimitAskDecision(check) {
+  return {
+    kind: 'ask',
+    reason: `context-guard call-limit: 本轮已 ${check.maxCallsPerTurn} 次 bash，是否继续（第 ${check.count} 次）`,
+    displayReason: {
+      en: `This turn has already used ${check.maxCallsPerTurn} bash calls. Continue with call ${check.count} of at most ${check.hardMaxCallsPerTurn}?`,
+      zh: `本轮已 ${check.maxCallsPerTurn} 次 bash 调用，是否继续？
+当前是第 ${check.count} 次；第 ${check.hardMaxCallsPerTurn} 次起会拒绝执行。建议合并命令、改用 inspect.sh，或先汇报进展。`,
+    },
+  }
+}
+
+function callLimitDenyDecision(check) {
+  return {
+    kind: 'deny',
+    reason: `context-guard call-limit: 本轮已 ${check.count} 次 bash，达到 ${check.hardMaxCallsPerTurn} 次硬上限；请拆任务或先汇报进展。`,
+  }
+}
+
+async function guardToolResult(exec, result, decision, cfg, cache, metrics, turnBudget, logger) {
   if (decision.kind !== 'accept') return decision
   if (!cfg.enabled || !cfg.toolNames.includes(exec?.name)) return decision
   if (decision.value !== undefined && !decision.content) return decision
@@ -166,8 +204,9 @@ async function guardToolResult(exec, result, decision, cfg, cache, metrics, logg
   const key = cacheable ? dedupKey(sessionId, exec.name, exec.arguments) : null
 
   const finish = async (out, extra = {}) => {
+    const emitted = out?.content ? contentText(out.content).length : text.length
+    turnBudget?.consumeOutput(sessionId, emitted)
     if (cfg.metricsEnabled) {
-      const emitted = out?.content ? contentText(out.content).length : text.length
       await metrics.record(metricOf({
         session: sessionId,
         callId: exec.callId,
@@ -183,6 +222,24 @@ async function guardToolResult(exec, result, decision, cfg, cache, metrics, logg
     }
     maybeCleanup(cfg, sessionId, logger)
     return out
+  }
+
+  if (turnBudget?.isExhausted(sessionId) && text.length > cfg.exhaustedOutputChars) {
+    try {
+      const log = await writeToolLog(cfg.outputDir, sessionId, exec.callId, text)
+      const header = `[context-guard:turn-output-limit] ${exec.name} 单轮累计输出已超过 ${turnBudget.maxTurnOutputChars} chars；本次 ${text.length} chars 已完整落盘：${log.path}\n`
+      const footer = `\n[... 本轮后续结果只保留前 ${cfg.exhaustedOutputChars} 字符，完整内容见上方路径 ...]`
+      const summary = renderBounded(text, {
+        budget: cfg.exhaustedOutputChars,
+        header,
+        footer,
+        headChars: cfg.headChars,
+        tailChars: cfg.tailChars,
+      })
+      return finish({ kind: 'accept', content: [{ type: 'text', text: summary }], ...(decision.additionalContexts ? { additionalContexts: decision.additionalContexts } : {}) }, { archived: log.path })
+    } catch (error) {
+      logger?.warn?.('context-guard: 单轮超限输出落盘失败，保留原结果: %s', error)
+    }
   }
 
   if (key) {
@@ -249,11 +306,22 @@ export function apply(ctx, config = {}) {
   const cfg = guardConfig(config)
   const cache = new DedupCache({ ttlMs: cfg.dedupTtlMs, maxEntries: cfg.dedupMaxEntries })
   const metrics = new MetricsRecorder(cfg.metricsDir, { logger: ctx.logger })
+  const turnBudget = new TurnBudget({
+    maxCallsPerTurn: cfg.maxCallsPerTurn,
+    hardMaxCallsPerTurn: cfg.hardMaxCallsPerTurn,
+    maxTurnOutputChars: cfg.maxTurnOutputChars,
+    exhaustedOutputChars: cfg.exhaustedOutputChars,
+    logger: ctx.logger,
+  })
   if (cfg.cleanupEnabled) {
     void cleanupOutputs(cfg.outputDir, { ...cfg.cleanup }).catch(error => ctx.logger?.warn?.('context-guard: 启动清理失败: %s', error))
   }
 
   ctx.on('session/event', (session, event) => {
+    if (event.type === 'turn/start') {
+      turnBudget.startTurn(session?.id || 'unknown-session', event.data?.turn)
+      return
+    }
     if (event.type === 'compaction/start') {
       void writeArchive(session, '压缩前快照（摘要尚未生成）', '', {
         trigger: event.data?.sourceCommandId ? 'manual' : 'automatic',
@@ -273,19 +341,38 @@ export function apply(ctx, config = {}) {
   ctx.on('tools/pre-execute', async (exec, next) => {
     const decision = await next()
     if (decision.kind !== 'allow') return decision
-    if (!cfg.enabled || !cfg.riskCheckEnabled || !cfg.riskToolNames.includes(exec?.name)) return decision
+    if (!cfg.enabled) return decision
     const command = commandOf(exec) || (exec?.name === 'web_fetch' && typeof exec?.arguments?.url === 'string'
       ? `curl ${exec.arguments.url}`
       : '')
     if (!command) return decision
-    const risk = analyzeCommand(command, { allowHosts: cfg.riskAllowHosts })
-    if (!risk.risk) return decision
-    ctx.logger?.info?.('context-guard: 风险命令待确认 (%s): %s', risk.level, risk.preview)
-    return riskAskDecision(risk)
+
+    const asks = []
+    if (cfg.riskCheckEnabled && cfg.riskToolNames.includes(exec?.name)) {
+      const risk = analyzeCommand(command, { allowHosts: cfg.riskAllowHosts })
+      if (risk.risk) {
+        ctx.logger?.info?.('context-guard: 风险命令待确认 (%s): %s', risk.level, risk.preview)
+        asks.push(riskAskDecision(risk))
+      }
+    }
+    if (cfg.commandLintEnabled && cfg.toolNames.includes(exec?.name)) {
+      const lint = lintCommand(command)
+      if (lint.hit) {
+        ctx.logger?.info?.('context-guard: 命令形态提示: %s', lint.reasons.map(reason => reason.code).join(', '))
+        asks.push(lintAskDecision(lint, command))
+      }
+    }
+    if (cfg.toolNames.includes(exec?.name)) {
+      const check = turnBudget.checkCall(sessionIdOf(exec))
+      if (check.action === 'deny') return callLimitDenyDecision(check)
+      if (check.action === 'ask') asks.push(callLimitAskDecision(check))
+    }
+    if (asks.length > 0) return mergeAskDecisions(asks)
+    return decision
   })
 
   ctx.on('tools/post-execute', async (exec, result, next) => {
     const decision = await next()
-    return guardToolResult(exec, result, decision, cfg, cache, metrics, ctx.logger)
+    return guardToolResult(exec, result, decision, cfg, cache, metrics, turnBudget, ctx.logger)
   })
 }

@@ -6,13 +6,15 @@ A DSH Host-only plugin that keeps long tool output out of the context while pres
 
 Problem: in long sessions, `bash` output (`ls -la`, whole-file `cat`, `journalctl`, repeated `curl` polls) is billed again and again. DSH's persistent-bash also truncates at 16,000 characters by default, so even archived output is incomplete.
 
-The plugin provides five safeguards:
+The plugin provides seven safeguards:
 
 1. **Bounded summaries** — when output exceeds its budget, the full text is written to disk and the context receives only head/tail, command type and the archive path.
 2. **Deduplication** — identical results for the same session + tool + args within 10 minutes return a pointer to the previous call; changed results return a line-level diff.
-3. **Read-only diagnostics** — `scripts/inspect.sh` replaces ad-hoc commands with fixed, bounded patterns.
-4. **Risky-command confirmation** — warns before `rm -rf`, `git reset --hard`, `curl | bash`, unknown hosts, privilege escalation, etc., and returns `ask` to DSH's approval service.
-5. **Compaction archive + metrics + cleanup** — writes `STATUS.md` before/after compaction, records savings, and prunes by retention period and quota.
+3. **Per-turn call gate** — the 21st bash call in a turn returns one `ask`; the 40th and later calls are denied.
+4. **Per-turn output gate** — after more than 40 KB has entered the context in one turn, later results over 800 characters are reduced to a summary plus archive path.
+5. **Command-shape hints** — whole-file `cat`, unscoped recursive searches under the home directory, and bare `curl` API calls return `ask` with bounded alternatives.
+6. **Read-only diagnostics** — `scripts/inspect.sh` replaces ad-hoc commands with fixed, bounded patterns.
+7. **Risk confirmation + compaction archive + metrics + cleanup** — confirms risky commands, writes `STATUS.md` around compaction, records savings, and prunes by retention period and quota.
 
 ## Install
 
@@ -30,7 +32,7 @@ dsh plugin --profile web add @fenghoer/dsh-context-guard
 dsh plugin --profile web add link:/home/zh/www/personalCloud/task/dsh-context-guard
 ```
 
-Then run the host migration script (it backs up the profile first):
+Then run the host migration script (it checks the package is installed and backs up the profile first):
 
 ```bash
 task/dsh-context-guard/scripts/apply-profile.sh
@@ -38,9 +40,9 @@ task/dsh-context-guard/scripts/apply-profile.sh
 
 The script:
 
-- replaces the old `compaction-archive` insert with `context-guard`;
-- sets `persistent-bash` `maxOutputChars: 65536`, otherwise the plugin only sees the truncated 16K;
-- configures the official `tool-result-pruner` with 8192/4096/1024.
+- replaces the old `compaction-archive` insert with `context-guard` and fixes the scoped package name `@fenghoer/dsh-context-guard`; if `node_modules/@fenghoer/dsh-context-guard` is missing in a profile, it prints the `dsh plugin --profile <p> add link:...` command to run and exits non-zero;
+- aligns `persistent-bash` `maxOutputChars` to `65536`, otherwise the plugin only sees the truncated 16K;
+- aligns the official `tool-result-pruner` to `6000/3000/1500`.
 
 Verify:
 
@@ -50,20 +52,27 @@ dsh --profile web --dump-config | grep -E "context-guard|maxOutputChars|tool-res
 
 ## Output budgets
 
-Defaults: `thresholdChars=3000`, `headChars=1200`, `tailChars=800`, hard cap 12000.
+Defaults: `thresholdChars=2000`, `headChars=1200`, `tailChars=800`, hard cap 6000.
 
 | Command class | Examples | Budget |
 |---|---|---:|
-| Default | ordinary bash | 3000 |
-| Quick status | `ps`, `df`, `free`, `ss`, `systemctl status` | 2500 |
-| Bounded logs | `journalctl --since`, `tail`, `docker logs --tail` | 4000 |
-| Bounded source | `sed -n`, `rg`, `grep`, `git show` | 5000 |
-| Diff | `git diff` | 6000 |
-| Build/test | `npm test`, `go test`, `pytest` | 8000 |
-| Errors | non-zero exit | at least 4000 |
-| Explicit | first line `# dsh-budget=8000` | up to 12000 |
+| Default | ordinary bash | 2000 |
+| Quick status | `ps`, `df`, `free`, `ss`, `systemctl status` | 1500 |
+| Bounded logs | `journalctl --since`, `tail`, `docker logs --tail` | 2500 |
+| Bounded source | `sed -n`, `rg`, `grep`, `git show` | 3000 |
+| Diff | `git diff` | 3000 |
+| Build/test | `npm test`, `go test`, `pytest` | 3000 |
+| Errors | non-zero exit | at least 2500 |
+| Explicit | first line `# dsh-budget=8000` | up to 6000 |
 
-Unbounded commands (`cat`, `journalctl` without `--since`/`-n`, `find /`, `du /`) are capped at 2500 with a hint to use a bounded command. If writing to disk fails, the original result is returned rather than losing evidence.
+Unbounded commands (`cat`, `journalctl` without `--since`/`-n`, `find /`, `du /`) are capped at 1500 with a hint to use a bounded command. If writing to disk fails, the original result is returned rather than losing evidence.
+
+## Per-turn gates and command hints
+
+- Call gate: the 21st bash call in a turn returns one `ask` (not repeated in that turn); the 40th and later calls return `deny`. `turn/start` resets counters; if that event is missing, the plugin falls back to per-session counting and logs a warning.
+- Output gate: after actual emitted context exceeds `maxTurnOutputChars=40000` in a turn, later results over `exhaustedOutputChars=800` are fully archived while the context receives at most 800 characters plus the path.
+- Command hints: whole-file `cat` suggests `sed -n '1,120p'` / `rg -n`; unscoped recursive search under `~/.dsh` or home suggests `--glob '!**/node_modules/**'`; bare `curl .../api/...` suggests `| jq '{field1,field2}'` or `-o /tmp/out.json` followed by a query.
+- A command-hint match and a risk match are merged into one `ask`; existing `deny`/`cancel` decisions win.
 
 ## Risky-command warnings
 
@@ -184,9 +193,15 @@ Notes:
     - id: context-guard
       name: '@fenghoer/dsh-context-guard'
       config:
-        thresholdChars: 3000
+        thresholdChars: 2000
         headChars: 1200
         tailChars: 800
+        hardMaxChars: 6000
+        maxCallsPerTurn: 20
+        hardMaxCallsPerTurn: 40
+        maxTurnOutputChars: 40000
+        exhaustedOutputChars: 800
+        commandLintEnabled: true
         dedupeMinChars: 800
         dedupTtlMs: 600000
         riskCheckEnabled: true
@@ -204,7 +219,7 @@ Notes:
 cd task/dsh-context-guard && npm test
 ```
 
-Coverage: compaction archive, command classification/budgets, bounded rendering, large-output archival, deduplication, line-level diffs, metrics, expiry cleanup, risky-command detection and the `ask` gate, plus `inspect.sh` syntax and help.
+Coverage: compaction archive, command classification/budgets, bounded rendering, large-output archival, deduplication, line-level diffs, per-turn call and output gates, command hints with merged `ask`, metrics, expiry cleanup, risky-command detection, plus `inspect.sh` syntax and help.
 
 ## Boundaries
 

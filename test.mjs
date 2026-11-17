@@ -5,6 +5,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { name, apply } from './index.js'
 import { budgetFor, classifyCommand, renderBounded } from './lib/budget.js'
+import { lintCommand } from './lib/command-lint.js'
+import { TurnBudget } from './lib/turn-budget.js'
 import { DedupCache } from './lib/dedup.js'
 import { cleanupOutputs } from './lib/cleanup.js'
 import { analyzeCommand } from './lib/risk.js'
@@ -18,18 +20,64 @@ assert.equal(classifyCommand('git diff --stat'), 'diff')
 assert.equal(classifyCommand('ps aux'), 'status')
 assert.equal(classifyCommand("sed -n '1,10p' app.log"), 'source')
 assert.equal(classifyCommand('# dsh-budget=8000\ncat app.log'), 'explicit')
-assert.equal(budgetFor('ls', false, {}), 3000)
+assert.equal(budgetFor('ls', false, {}), 2000)
 assert.equal(budgetFor('ls', false, { thresholdChars: 5000 }), 5000)
-assert.equal(budgetFor('git diff', false, {}), 6000)
-assert.equal(budgetFor('npm test', false, {}), 8000)
-assert.equal(budgetFor('# dsh-budget=8000\ncat app.log', false, {}), 8000)
-assert.equal(budgetFor('# dsh-budget=99999\ncat app.log', false, {}), 12000)
+assert.equal(budgetFor('cat app.log', false, {}), 1500)
+assert.equal(budgetFor('journalctl -u nginx -n 20', false, {}), 2500)
+assert.equal(budgetFor('sed -n \'1,10p\' app.log', false, {}), 3000)
+assert.equal(budgetFor('git diff', false, {}), 3000)
+assert.equal(budgetFor('npm test', false, {}), 3000)
+assert.equal(budgetFor('ps aux', false, {}), 1500)
+assert.equal(budgetFor('ls', true, {}), 2500)
+assert.equal(budgetFor('# dsh-budget=8000\ncat app.log', false, {}), 6000)
+assert.equal(budgetFor('# dsh-budget=99999\ncat app.log', false, {}), 6000)
 
 const bounded = renderBounded('x'.repeat(10000), { budget: 3000, header: 'H\n', footer: '\nF', headChars: 1200, tailChars: 800 })
 assert.ok(bounded.length <= 3000, `bounded length ${bounded.length}`)
 assert.match(bounded, /middle clipped/)
 assert.ok(bounded.startsWith('H\n'))
 assert.ok(bounded.endsWith('F'))
+
+
+// 单轮调用与累计输出门禁
+const turnWarnings = []
+const turnBudget = new TurnBudget({ maxCallsPerTurn: 20, hardMaxCallsPerTurn: 40, maxTurnOutputChars: 100, logger: { warn(...args) { turnWarnings.push(args) } } })
+turnBudget.startTurn('turn-test', 1)
+for (let index = 1; index <= 20; index++) assert.equal(turnBudget.checkCall('turn-test').action, 'allow')
+assert.equal(turnBudget.checkCall('turn-test').action, 'ask')
+assert.equal(turnBudget.checkCall('turn-test').action, 'allow')
+for (let index = 23; index < 40; index++) assert.equal(turnBudget.checkCall('turn-test').action, 'allow')
+assert.equal(turnBudget.checkCall('turn-test').action, 'deny')
+assert.equal(turnBudget.consumeOutput('turn-test', 101).exhausted, true)
+assert.equal(turnBudget.isExhausted('turn-test'), true)
+turnBudget.startTurn('turn-test', 2)
+assert.equal(turnBudget.checkCall('turn-test').action, 'allow')
+assert.equal(turnBudget.isExhausted('turn-test'), false)
+const fallbackBudget = new TurnBudget({ logger: { warn(...args) { turnWarnings.push(args) } } })
+assert.equal(fallbackBudget.maxCallsPerTurn, 20)
+assert.equal(fallbackBudget.hardMaxCallsPerTurn, 40)
+assert.equal(fallbackBudget.maxTurnOutputChars, 40000)
+assert.equal(fallbackBudget.exhaustedOutputChars, 800)
+assert.equal(fallbackBudget.checkCall('fallback-session').action, 'allow')
+assert.equal(fallbackBudget.checkCall('fallback-session').action, 'allow')
+assert.equal(turnWarnings.length, 1)
+
+// 命令形态提示
+const catLint = lintCommand('cat ~/.dsh/profiles/web/cordis.patch.yml')
+assert.equal(catLint.hit, true)
+assert.equal(catLint.reasons[0].code, 'whole-file-cat')
+assert.match(catLint.reasons[0].alternative, /sed -n/)
+assert.equal(lintCommand("sed -n '1,120p' app.log").hit, false)
+const recursiveLint = lintCommand("grep -R token ~/.dsh")
+assert.equal(recursiveLint.hit, true)
+assert.equal(recursiveLint.reasons[0].code, 'recursive-home-search')
+assert.match(recursiveLint.reasons[0].alternative, /--glob '!\*\*\/node_modules\/\*\*'/)
+assert.equal(lintCommand("rg -n --glob '!**/node_modules/**' token ~/.dsh").hit, false)
+const curlLint = lintCommand('curl -s http://127.0.0.1:3080/api/sessions')
+assert.equal(curlLint.hit, true)
+assert.equal(curlLint.reasons[0].code, 'bare-curl-api')
+assert.equal(lintCommand('curl -s http://127.0.0.1:3080/api/sessions | jq \'{id}\'').hit, false)
+assert.equal(lintCommand('curl -o /tmp/out.json http://127.0.0.1:3080/api/sessions').hit, false)
 
 // 插件钩子
 const dir = await mkdtemp(join(tmpdir(), 'dsh-context-guard-'))
@@ -91,6 +139,38 @@ const fetchAsked = await preExecute(fetchExec, async () => ({ kind: 'allow' }))
 assert.equal(fetchAsked.kind, 'ask')
 assert.match(fetchAsked.reason, /unknown-link/)
 
+// 命令 lint 与风险规则合并为一个 ask
+const lintExec = { ...riskyExec, callId: 'call-lint-1', arguments: { command: 'cat ~/.dsh/profiles/web/cordis.patch.yml' } }
+const lintAsked = await preExecute(lintExec, async () => ({ kind: 'allow' }))
+assert.equal(lintAsked.kind, 'ask')
+assert.match(lintAsked.reason, /whole-file-cat/)
+assert.match(lintAsked.displayReason.zh, /sed -n/)
+const mergedExec = { ...riskyExec, callId: 'call-merged-1', arguments: { command: 'rm -rf ./tmp-data && cat ~/.dsh/profiles/web/cordis.patch.yml' } }
+const mergedAsked = await preExecute(mergedExec, async () => ({ kind: 'allow' }))
+assert.equal(mergedAsked.kind, 'ask')
+assert.match(mergedAsked.reason, /destructive-rm/)
+assert.match(mergedAsked.reason, /whole-file-cat/)
+assert.match(mergedAsked.displayReason.zh, /风险命令需要确认/)
+assert.match(mergedAsked.displayReason.zh, /替代/)
+
+// 第 21 次 bash 返回一次 ask，第 40 次 deny
+const gateExec = { ...safeExec, agent: { id: 'session-gate' } }
+await handlers.get('session/event')[0]({ id: 'session-gate' }, { type: 'turn/start', data: { turn: 1 } })
+for (let index = 1; index <= 20; index++) {
+  assert.equal((await preExecute(gateExec, async () => ({ kind: 'allow' }))).kind, 'allow')
+}
+const ask21 = await preExecute(gateExec, async () => ({ kind: 'allow' }))
+assert.equal(ask21.kind, 'ask')
+assert.match(ask21.reason, /本轮已 20 次 bash/)
+assert.match(ask21.displayReason.zh, /是否继续/)
+assert.equal((await preExecute(gateExec, async () => ({ kind: 'allow' }))).kind, 'allow')
+for (let index = 23; index < 40; index++) {
+  assert.equal((await preExecute(gateExec, async () => ({ kind: 'allow' }))).kind, 'allow')
+}
+const deny40 = await preExecute(gateExec, async () => ({ kind: 'allow' }))
+assert.equal(deny40.kind, 'deny')
+assert.match(deny40.reason, /硬上限/)
+
 // 压缩归档
 const session = {
   id: 'session-test',
@@ -118,6 +198,7 @@ assert.match(status, /## Primary Request/)
 assert.match(status, /约 12345 token/)
 
 // 大输出落盘 + 有界摘要
+await handlers.get('session/event')[0](session, { type: 'turn/start', data: { turn: 1 } })
 const fullText = Array.from({ length: 2000 }, (_, index) => `line-${index}-${'x'.repeat(20)}`).join('\n')
 const exec = {
   name: 'bash',
@@ -161,6 +242,23 @@ const changedExec = { ...exec, callId: 'call-test-3' }
 const changed = await handlers.get('tools/post-execute')[0](changedExec, changedResult, async () => ({ kind: 'accept' }))
 assert.match(changed.content[0].text, /\[context-guard:diff\]/)
 assert.match(changed.content[0].text, /\+ changed-line/)
+
+// 单轮累计输出超过 40000 后，后续大结果只回 800 字符 + 落盘路径
+await handlers.get('session/event')[0]({ id: 'session-turn-limit' }, { type: 'turn/start', data: { turn: 1 } })
+let limited = null
+for (let index = 0; index < 25; index++) {
+  const turnExec = {
+    name: 'bash',
+    callId: `call-turn-${index}`,
+    arguments: { command: `seq 1 ${2000 + index}` },
+    agent: { id: 'session-turn-limit' },
+  }
+  const turnResult = { isError: false, content: [{ type: 'text', text: fullText + `\ncall-${index}` }] }
+  limited = await handlers.get('tools/post-execute')[0](turnExec, turnResult, async () => ({ kind: 'accept' }))
+}
+assert.ok(limited.content[0].text.length <= 800, `turn-limited length ${limited.content[0].text.length}`)
+assert.match(limited.content[0].text, /\[context-guard:turn-output-limit\]/)
+assert.match(limited.content[0].text, /完整落盘|完整输出/)
 
 // 指标 JSONL
 const metricFiles = await readdir(join(dir, 'metrics'))
