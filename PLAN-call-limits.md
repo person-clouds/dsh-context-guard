@@ -75,6 +75,16 @@ commandLintEnabled: true
 - 回放 `session-277f61e5...` 的 77 条命令/结果：原始 205,616 chars，预计 emitted ≤ 60,000 chars（当前预算约 153,465，收紧后约 112,862，加单轮累计门禁后进一步下降）。
 - 重启后跑一条小命令，`~/.dsh/context-guard/metrics/<session>.jsonl` 出现新记录。
 
+## 追加：命令形态硬拦截（2026-11-17）
+
+按后续要求，把命令形态从单纯 `ask` 升级为默认 `deny`：
+
+- 新增配置 `commandLintMode: deny|ask`，默认 `deny`；
+- 新增 `commandGuidanceEnabled: true`，通过 `systemPrompt.section` 注入 `read`/`grep`/`jq` 使用引导；
+- `deny` 的 `reason` 包含替代命令，并明确 DSH 不会自动改写参数；
+- 复杂流程可显式设 `commandLintMode: ask` 降级为一次确认；
+- 整文件 `cat` 进入管道时不再误报；已有测试覆盖 `deny`、`ask`、系统提示和合并 `ask`。
+
 ## 回滚
 
 1. 代码：`git revert <本次 commit>`。

@@ -12,7 +12,7 @@ The plugin provides seven safeguards:
 2. **Deduplication** — identical results for the same session + tool + args within 10 minutes return a pointer to the previous call; changed results return a line-level diff.
 3. **Per-turn call gate** — the 21st bash call in a turn returns one `ask`; the 40th and later calls are denied.
 4. **Per-turn output gate** — after more than 40 KB has entered the context in one turn, later results over 800 characters are reduced to a summary plus archive path.
-5. **Command-shape hints** — whole-file `cat`, unscoped recursive searches under the home directory, and bare `curl` API calls return `ask` with bounded alternatives.
+5. **Command-shape enforcement** — whole-file `cat`, unscoped recursive searches under the home directory, and bare `curl` API calls are denied by default with bounded alternatives (`read`/`grep`/`jq`); `ask` mode is configurable; system-prompt guidance is injected too.
 6. **Read-only diagnostics** — `scripts/inspect.sh` replaces ad-hoc commands with fixed, bounded patterns.
 7. **Risk confirmation + compaction archive + metrics + cleanup** — confirms risky commands, writes `STATUS.md` around compaction, records savings, and prunes by retention period and quota.
 
@@ -72,8 +72,10 @@ Unbounded commands (`cat`, `journalctl` without `--since`/`-n`, `find /`, `du /`
 
 - Call gate: the 21st bash call in a turn returns one `ask` (not repeated in that turn); the 40th and later calls return `deny`. `turn/start` resets counters; if that event is missing, the plugin falls back to per-session counting and logs a warning.
 - Output gate: after actual emitted context exceeds `maxTurnOutputChars=40000` in a turn, later results over `exhaustedOutputChars=800` are fully archived while the context receives at most 800 characters plus the path.
-- Command hints: whole-file `cat` suggests `sed -n '1,120p'` / `rg -n`; unscoped recursive search under `~/.dsh` or home suggests `--glob '!**/node_modules/**'`; bare `curl .../api/...` suggests `| jq '{field1,field2}'` or `-o /tmp/out.json` followed by a query.
-- A command-hint match and a risk match are merged into one `ask`; existing `deny`/`cancel` decisions win.
+- Command enforcement: `commandLintMode: deny` by default. Whole-file `cat` points to the `read` tool (or `sed -n '1,120p'`); unscoped recursive search points to `grep`/`glob` or `--glob '!**/node_modules/**'`; bare `curl .../api/...` points to `| jq '{field1,field2}'` or `-o /tmp/out.json` followed by a query.
+- DSH does not allow `tools/pre-execute` to rewrite tool arguments, so the plugin cannot silently turn `cat` into `read`; it denies the current call and puts the replacement in the model-visible `reason`, letting the model retry with a bounded call.
+- Complex shell workflows can set `commandLintMode: ask` to downgrade to confirmation; `commandGuidanceEnabled: true` also registers system-prompt guidance for `read`/`grep`/`jq`.
+- In `ask` mode a command-lint match and a risk match are merged into one `ask`; a lint `deny` or an existing `deny`/`cancel` wins.
 
 ## Risky-command warnings
 
@@ -203,6 +205,8 @@ Notes:
         maxTurnOutputChars: 40000
         exhaustedOutputChars: 800
         commandLintEnabled: true
+        commandLintMode: deny      # deny (default, hard block) | ask (confirm complex workflows)
+        commandGuidanceEnabled: true
         dedupeMinChars: 800
         dedupTtlMs: 600000
         riskCheckEnabled: true
@@ -220,7 +224,7 @@ Notes:
 cd task/dsh-context-guard && npm test
 ```
 
-Coverage: compaction archive, command classification/budgets, bounded rendering, large-output archival, deduplication, line-level diffs, per-turn call and output gates, command hints with merged `ask`, metrics, expiry cleanup, risky-command detection, plus `inspect.sh` syntax and help.
+Coverage: compaction archive, command classification/budgets, bounded rendering, large-output archival, deduplication, line-level diffs, per-turn call and output gates, command-shape deny/ask with merged `ask`, metrics, expiry cleanup, risky-command detection, plus `inspect.sh` syntax and help.
 
 ## Boundaries
 

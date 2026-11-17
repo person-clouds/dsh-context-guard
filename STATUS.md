@@ -1,7 +1,7 @@
 # STATUS — dsh-context-guard
 
 - 更新时间：2026-11-17
-- 一句话：DSH 工具输出预算/落盘、去重、单轮调用/输出门禁、命令形态提示、风险确认、只读诊断、压缩归档与指标。
+- 一句话：DSH 工具输出预算/落盘、去重、单轮调用/输出门禁、命令形态拦截、风险确认、只读诊断、压缩归档与指标。
 - 位置：`task/dsh-context-guard/`；代码与测试已完成，待宿主机安装包并执行 `scripts/apply-profile.sh` 修复 web/superagent profile。
 
 ## 已完成
@@ -22,7 +22,7 @@
 - [x] `tools/pre-execute` 风险命令警示：删除/仓库删除、git 强推/重置、下载执行、未知链接（含 `web_fetch`）、关机停服、容器/数据库删除、提权等返回 `ask` 让用户确认；不覆盖已有 deny/cancel/ask。
 - [x] 单轮 bash 调用门禁：第 21 次起 `ask`（同一轮只问一次），第 40 次起 `deny`；`turn/start` 重置，缺事件时按 session 退化计数并 warning；
 - [x] 单轮累计输出门禁：本轮 emitted 超过 40000 字符后，后续 >800 字符结果完整落盘，上下文只回 ≤800 字符摘要 + 路径；
-- [x] 命令形态提示：整文件 `cat`、无排除的 `~/.dsh`/家目录递归搜索、裸 `curl` API 返回 `ask` 并给替代命令；与风险规则命中时合并为一次 `ask`；
+- [x] 命令形态拦截：整文件 `cat`、无排除的 `~/.dsh`/家目录递归搜索、裸 `curl` API 默认返回 `deny` 并给 `read`/`grep`/`jq` 等替代；可配 `commandLintMode: ask`；同时注册系统提示引导；`ask` 模式下与风险规则合并为一次 `ask`；
 - [x] `scripts/apply-profile.sh` 修复：检查 profile 已安装 scoped 包和失效的 `dsh-superagent` link；修正包名；删除顶层 `persistent-bash` 旧块，改为覆盖 minimal preset 的 `config.plugins` 并设 `maxOutputChars=65536`；`tool-result-pruner=6000/3000/1500`；重复执行幂等。
 - [x] 中文 README 优先展示，补充英文 `README.en.md`；
 - [x] linuxops 可选安装方案：不安装自动回退、插件只读兼容层、通过 `--binary` 接入自建/上游二进制；安装脚本不 sudo、不自动改 PATH；
@@ -53,7 +53,7 @@
 | 2026-11-14 | `scripts/install-linuxops.sh` 临时 HOME 安装/卸载 | 兼容层可执行，`inspect.sh overview` 通过 `LINUXOPS_BIN` 联调成功 |
 | 2026-11-15 | `node test.mjs` | 通过（0.3.1 文档更新回归） |
 | 2026-11-15 | `npm pack --dry-run` | 包含 `README.md` / `README.en.md` |
-| 2026-11-17 | `node test.mjs` | ok；新增预算收紧、调用门禁、累计输出门禁、命令形态提示与合并 `ask` 测试 |
+| 2026-11-17 | `node test.mjs` | ok；新增预算收紧、调用门禁、累计输出门禁、命令形态 `deny`/`ask`、系统提示与合并 `ask` 测试 |
 | 2026-11-17 | `scripts/apply-profile.sh` 临时 `DSH_HOME` 连跑两次 | 包名修正、`dsh-superagent` link 可解析、顶层 `persistent-bash` 删除、minimal preset 内 `maxOutputChars=65536`、`6000/3000/1500` 对齐、第二次“无变化”幂等通过 |
 | 2026-11-17 | `dsh plugin --profile web add link:...` | 失败：沙箱 `~/.dsh` 为 EROFS；需宿主机执行 |
 | 2026-11-17 | 回放 `session-277f61e5...` 77 条工具结果 | 原始 205,616 chars → emitted 48,800 chars（-76.3%），低于 ≤60,000 目标 |

@@ -15,7 +15,7 @@ import { DEFAULT_DEDUPE_MIN_CHARS, DedupCache, dedupKey, diffLines } from './lib
 import { MetricsRecorder, metricOf } from './lib/metrics.js'
 import { cleanupOutputs } from './lib/cleanup.js'
 import { analyzeCommand, riskAskDecision } from './lib/risk.js'
-import { lintAskDecision, lintCommand } from './lib/command-lint.js'
+import { lintCommand, lintDecision } from './lib/command-lint.js'
 import { TurnBudget } from './lib/turn-budget.js'
 
 export const name = 'dsh-context-guard'
@@ -117,6 +117,8 @@ function guardConfig(config) {
       : [...new Set([...toolNames, 'web_fetch'])],
     riskAllowHosts: Array.isArray(config.riskAllowHosts) ? config.riskAllowHosts : undefined,
     commandLintEnabled: config.commandLintEnabled !== false,
+    commandLintMode: config.commandLintMode === 'ask' ? 'ask' : 'deny',
+    commandGuidanceEnabled: config.commandGuidanceEnabled !== false,
     maxCallsPerTurn: Number(config.maxCallsPerTurn) || 20,
     hardMaxCallsPerTurn: Number(config.hardMaxCallsPerTurn) || 40,
     maxTurnOutputChars: Number(config.maxTurnOutputChars) || 40000,
@@ -185,6 +187,30 @@ function callLimitDenyDecision(check) {
   return {
     kind: 'deny',
     reason: `context-guard call-limit: 本轮已 ${check.count} 次 bash，达到 ${check.hardMaxCallsPerTurn} 次硬上限；请拆任务或先汇报进展。`,
+  }
+}
+
+const COMMAND_GUIDANCE = [
+  '工具使用约束（context-guard）：',
+  '- 读取文本文件优先使用 read 工具（offset/limit 分段），不要用 cat 整文件读取；除非用户明确要求或必须处理非文本文件。',
+  "- 递归搜索优先使用 grep/glob 工具；若必须用 shell，必须加 --glob '!**/node_modules/**' 等排除，不要直接全量扫描 ~/.dsh 或家目录。",
+  "- 调用 HTTP API 时先用 jq 裁剪字段，或 curl -o /tmp/out.json 落盘后再查询；不要直接输出裸 curl 大响应。",
+  '- 只有构建、测试、安装、服务运维等确实需要 shell 的任务才使用 bash。',
+  '- 违反上述形态的命令会被 context-guard 拒绝；请按拒绝信息中的替代命令重新调用。',
+].join('\n')
+
+function registerCommandGuidance(ctx, cfg) {
+  if (!cfg.commandLintEnabled || !cfg.commandGuidanceEnabled) return
+  try {
+    const systemPrompt = ctx.systemPrompt ?? ctx.get?.('systemPrompt')
+    if (typeof systemPrompt?.section !== 'function') return
+    systemPrompt.section({
+      name: 'context-guard:command-guidance',
+      order: 490,
+      text: COMMAND_GUIDANCE,
+    })
+  } catch (error) {
+    ctx.logger?.warn?.('context-guard: 注册命令使用提示失败: %s', error)
   }
 }
 
@@ -306,6 +332,7 @@ export function apply(ctx, config = {}) {
   const cfg = guardConfig(config)
   const cache = new DedupCache({ ttlMs: cfg.dedupTtlMs, maxEntries: cfg.dedupMaxEntries })
   const metrics = new MetricsRecorder(cfg.metricsDir, { logger: ctx.logger })
+  registerCommandGuidance(ctx, cfg)
   const turnBudget = new TurnBudget({
     maxCallsPerTurn: cfg.maxCallsPerTurn,
     hardMaxCallsPerTurn: cfg.hardMaxCallsPerTurn,
@@ -358,8 +385,10 @@ export function apply(ctx, config = {}) {
     if (cfg.commandLintEnabled && cfg.toolNames.includes(exec?.name)) {
       const lint = lintCommand(command)
       if (lint.hit) {
-        ctx.logger?.info?.('context-guard: 命令形态提示: %s', lint.reasons.map(reason => reason.code).join(', '))
-        asks.push(lintAskDecision(lint, command))
+        ctx.logger?.info?.('context-guard: 命令形态拦截 (%s): %s', cfg.commandLintMode, lint.reasons.map(reason => reason.code).join(', '))
+        const verdict = lintDecision(lint, command, cfg.commandLintMode)
+        if (verdict.kind === 'deny') return verdict
+        asks.push(verdict)
       }
     }
     if (cfg.toolNames.includes(exec?.name)) {

@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { name, apply } from './index.js'
 import { budgetFor, classifyCommand, renderBounded } from './lib/budget.js'
-import { lintCommand } from './lib/command-lint.js'
+import { lintCommand, lintDecision } from './lib/command-lint.js'
 import { TurnBudget } from './lib/turn-budget.js'
 import { DedupCache } from './lib/dedup.js'
 import { cleanupOutputs } from './lib/cleanup.js'
@@ -66,7 +66,16 @@ assert.equal(turnWarnings.length, 1)
 const catLint = lintCommand('cat ~/.dsh/profiles/web/cordis.patch.yml')
 assert.equal(catLint.hit, true)
 assert.equal(catLint.reasons[0].code, 'whole-file-cat')
+assert.match(catLint.reasons[0].alternative, /read 工具/)
 assert.match(catLint.reasons[0].alternative, /sed -n/)
+const catDenied = lintDecision(catLint, 'cat ~/.dsh/profiles/web/cordis.patch.yml')
+assert.equal(catDenied.kind, 'deny')
+assert.match(catDenied.reason, /whole-file-cat/)
+assert.match(catDenied.reason, /read 工具/)
+assert.match(catDenied.reason, /sed -n/)
+assert.match(catDenied.reason, /不会自动改写/)
+assert.equal(lintDecision(catLint, 'cat ~/.dsh/profiles/web/cordis.patch.yml', 'ask').kind, 'ask')
+assert.equal(lintCommand('cat app.log | head -20').hit, false)
 assert.equal(lintCommand("sed -n '1,120p' app.log").hit, false)
 const recursiveLint = lintCommand("grep -R token ~/.dsh")
 assert.equal(recursiveLint.hit, true)
@@ -83,15 +92,40 @@ assert.equal(lintCommand('curl -o /tmp/out.json http://127.0.0.1:3080/api/sessio
 const dir = await mkdtemp(join(tmpdir(), 'dsh-context-guard-'))
 const outputDir = join(dir, 'tool-output')
 const handlers = new Map()
+let commandGuidance
 const ctx = {
   on(type, fn) {
     if (!handlers.has(type)) handlers.set(type, [])
     handlers.get(type).push(fn)
   },
   logger: { warn() {} },
+  systemPrompt: { section(section) { commandGuidance = section; return () => {} } },
 }
 apply(ctx, { dir, outputDir, metricsDir: join(dir, 'metrics'), thresholdChars: 3000, cleanupEnabled: false })
 assert.equal(name, 'dsh-context-guard')
+assert.equal(commandGuidance.name, 'context-guard:command-guidance')
+assert.match(commandGuidance.text, /read 工具/)
+assert.match(commandGuidance.text, /grep\/glob/)
+assert.match(commandGuidance.text, /jq/)
+
+// 单独的 ask 模式实例，用于验证复杂流程可降级为确认
+const askHandlers = new Map()
+const askCtx = {
+  on(type, fn) {
+    if (!askHandlers.has(type)) askHandlers.set(type, [])
+    askHandlers.get(type).push(fn)
+  },
+  logger: { warn() {} },
+}
+apply(askCtx, {
+  dir,
+  outputDir: join(dir, 'ask-output'),
+  metricsDir: join(dir, 'ask-metrics'),
+  thresholdChars: 3000,
+  cleanupEnabled: false,
+  commandLintMode: 'ask',
+})
+const askPreExecute = askHandlers.get('tools/pre-execute')[0]
 
 // 风险命令识别：删除、强推、下载执行、未知链接、提权
 assert.equal(analyzeCommand('ls -la').risk, false)
@@ -141,12 +175,17 @@ assert.match(fetchAsked.reason, /unknown-link/)
 
 // 命令 lint 与风险规则合并为一个 ask
 const lintExec = { ...riskyExec, callId: 'call-lint-1', arguments: { command: 'cat ~/.dsh/profiles/web/cordis.patch.yml' } }
-const lintAsked = await preExecute(lintExec, async () => ({ kind: 'allow' }))
+const lintDenied = await preExecute(lintExec, async () => ({ kind: 'allow' }))
+assert.equal(lintDenied.kind, 'deny')
+assert.match(lintDenied.reason, /whole-file-cat/)
+assert.match(lintDenied.reason, /read 工具/)
+assert.match(lintDenied.reason, /sed -n/)
+const lintAsked = await askPreExecute(lintExec, async () => ({ kind: 'allow' }))
 assert.equal(lintAsked.kind, 'ask')
 assert.match(lintAsked.reason, /whole-file-cat/)
-assert.match(lintAsked.displayReason.zh, /sed -n/)
+assert.match(lintAsked.displayReason.zh, /read 工具/)
 const mergedExec = { ...riskyExec, callId: 'call-merged-1', arguments: { command: 'rm -rf ./tmp-data && cat ~/.dsh/profiles/web/cordis.patch.yml' } }
-const mergedAsked = await preExecute(mergedExec, async () => ({ kind: 'allow' }))
+const mergedAsked = await askPreExecute(mergedExec, async () => ({ kind: 'allow' }))
 assert.equal(mergedAsked.kind, 'ask')
 assert.match(mergedAsked.reason, /destructive-rm/)
 assert.match(mergedAsked.reason, /whole-file-cat/)
