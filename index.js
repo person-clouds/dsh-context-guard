@@ -116,7 +116,7 @@ export async function docGuardDecision(command, cfg, logger, deps = {}) {
   const parsed = parseGitCommitCommand(command)
   if (!parsed) return null
   const workspaceRoot = cfg.docGuardWorkspaceRoot
-  const repoRoot = await gitTopLevel(parsed.cwd, cfg.docGuardTimeoutMs)
+  const repoRoot = await gitTopLevel(deps.cwd || parsed.cwd, cfg.docGuardTimeoutMs)
   if (!repoRoot) return null
   try {
     await access(join(repoRoot, 'docs-policy.json'))
@@ -513,7 +513,7 @@ export function apply(ctx, config = {}) {
       }
     }
     if (cfg.docGuardEnabled && cfg.toolNames.includes(exec?.name)) {
-      const docDecision = await docGuardDecision(command, cfg, ctx.logger)
+      const docDecision = await docGuardDecision(command, cfg, ctx.logger, { cwd: exec?.arguments?.cwd || exec?.cwd })
       if (docDecision?.kind === 'deny') return docDecision
     }
     if (cfg.toolNames.includes(exec?.name)) {
