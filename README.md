@@ -109,6 +109,12 @@ dsh --profile web --dump-config | grep -E "context-guard|maxOutputChars|tool-res
 - 变化结果：`[context-guard:diff]`，只显示前后缀之间的变化块；
 - 缓存是进程内内存，重启后失效；这是安全的有意选择。
 
+## 文档提交门禁
+
+`tools/pre-execute` 识别 `git commit`（含 `git -C <dir> commit` 与 `cd <dir> && git commit`），解析目标仓；目标仓存在 `docs-policy.json` 时调用工作区 `scripts/check.sh --repo <repo>`。检查失败返回 `deny`，附失败项，不自动执行 `--tag`，也不猜 `implementation_status`。非提交命令、无 `docs-policy.json` 的仓库不触发。
+
+配置：`docGuardEnabled`（默认 `true`）、`docGuardWorkspaceRoot`（默认 `/home/zh/www`）、`docGuardTimeoutMs`（默认 `30000`）。修改后重启 DSH profile 生效。
+
 ## 数据目录
 
 ```text
@@ -214,6 +220,9 @@ LINUXOPS_BIN="$HOME/.local/bin/linuxops" task/dsh-context-guard/scripts/inspect.
         dedupeMinChars: 800
         dedupTtlMs: 600000
         riskCheckEnabled: true
+        docGuardEnabled: true
+        docGuardWorkspaceRoot: /home/zh/www
+        docGuardTimeoutMs: 30000
         # riskToolNames: [bash, persistent-bash, terminal-bash, web_fetch]
         # riskAllowHosts: [localhost, 127.0.0.1, github.com]
         retentionDays: 7
@@ -228,7 +237,7 @@ LINUXOPS_BIN="$HOME/.local/bin/linuxops" task/dsh-context-guard/scripts/inspect.
 cd task/dsh-context-guard && npm test
 ```
 
-测试覆盖：压缩归档、命令分类/预算、有界渲染、大输出落盘、去重、行级 diff、单轮调用与累计输出门禁、命令形态 deny/ask 与合并 `ask`、指标、过期清理、风险命令识别、`inspect.sh` 语法与帮助。
+测试覆盖：压缩归档、命令分类/预算、有界渲染、大输出落盘、去重、行级 diff、单轮调用与累计输出门禁、命令形态 deny/ask 与合并 `ask`、指标、过期清理、风险命令识别、文档提交门禁（坏文档拒绝、修复后放行）、`inspect.sh` 语法与帮助。
 
 ## 边界
 

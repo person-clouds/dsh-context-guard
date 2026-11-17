@@ -6,8 +6,10 @@
  * - 不额外调用模型，不改变压缩阈值，写入失败只 warning。
  */
 
-import { mkdir, writeFile } from 'node:fs/promises'
-import { join } from 'node:path'
+import { execFile } from 'node:child_process'
+import { access, mkdir, readFile, writeFile } from 'node:fs/promises'
+import { basename, isAbsolute, join, resolve, sep } from 'node:path'
+import { promisify } from 'node:util'
 import { commandOf, dshHome, hashText, safeName, sessionIdOf, textOf as contentText } from './lib/common.js'
 import { budgetFor, classifyCommand, renderBounded } from './lib/budget.js'
 import { writeToolLog } from './lib/archive.js'
@@ -17,6 +19,8 @@ import { cleanupOutputs } from './lib/cleanup.js'
 import { analyzeCommand, riskAskDecision } from './lib/risk.js'
 import { lintCommand, lintDecision } from './lib/command-lint.js'
 import { TurnBudget } from './lib/turn-budget.js'
+
+const execFileAsync = promisify(execFile)
 
 export const name = 'dsh-context-guard'
 
@@ -40,6 +44,108 @@ function iso(ms) {
 
 function fence(text) {
   return '```\n' + String(text).replaceAll('```', '``\u200b`') + '\n```'
+}
+
+/** 解析命令中的 git commit 目标目录；支持 `git -C <dir> commit` 与前置 `cd <dir> && git commit`。 */
+export function parseGitCommitCommand(command) {
+  const text = String(command || '')
+  if (!/(?:^|[;&|\s])git(?:\s+-C\s+(?:"[^"]+"|'[^']+'|\S+))?\s+commit(?:\s|$)/.test(text)) return null
+  let cwd = null
+  for (const segment of text.split(/&&|\|\||;|\n/)) {
+    const part = segment.trim()
+    const cd = part.match(/^cd\s+(?:"([^"]+)"|'([^']+)'|(\S+))\s*$/)
+    if (cd) cwd = cd[1] || cd[2] || cd[3]
+    const direct = part.match(/(?:^|\s)git\s+-C\s+(?:"([^"]+)"|'([^']+)'|(\S+))\s+commit\b/)
+    if (direct) return { cwd: direct[1] || direct[2] || direct[3] }
+  }
+  return { cwd }
+}
+
+async function repoIndex(workspaceRoot) {
+  const yamlPath = join(workspaceRoot, 'repos.yaml')
+  const repos = []
+  let current = null
+  let text = ''
+  try {
+    text = await readFile(yamlPath, 'utf8')
+  } catch {
+    return repos
+  }
+  for (const line of text.split(/\r?\n/)) {
+    const id = line.match(/^\s*-\s+id:\s*["']?([^"'\s]+)["']?\s*$/)
+    if (id) { current = { id: id[1], path: '' }; repos.push(current); continue }
+    const path = line.match(/^\s*path:\s*["']?([^"'\s]+)["']?\s*$/)
+    if (path && current) current.path = path[1]
+  }
+  return repos.filter(repo => repo.id && repo.path)
+}
+
+async function gitTopLevel(candidate, timeoutMs) {
+  const cwd = candidate || process.cwd()
+  try {
+    const { stdout } = await execFileAsync('git', ['-C', cwd, 'rev-parse', '--show-toplevel'], { timeout: timeoutMs })
+    return stdout.trim()
+  } catch {
+    return null
+  }
+}
+
+function trimCheckOutput(value, max = 2400) {
+  const text = String(value || '').trim()
+  return text.length > max ? text.slice(0, max) + '\n[... 输出已截断 ...]' : text
+}
+
+async function defaultRunDocCheck(repoId, cfg) {
+  const checkSh = join(cfg.docGuardWorkspaceRoot, 'scripts/check.sh')
+  try {
+    const { stdout, stderr } = await execFileAsync(checkSh, ['--repo', repoId], {
+      cwd: cfg.docGuardWorkspaceRoot,
+      timeout: cfg.docGuardTimeoutMs,
+      maxBuffer: 1024 * 1024,
+    })
+    return { ok: true, output: `${stdout || ''}${stderr || ''}` }
+  } catch (error) {
+    const output = `${error?.stdout || ''}${error?.stderr || ''}` || error?.message || String(error)
+    return { ok: false, output }
+  }
+}
+
+/** 提交前文档门禁：只在目标仓存在 docs-policy.json 时运行 check.sh --repo。 */
+export async function docGuardDecision(command, cfg, logger, deps = {}) {
+  if (!cfg?.docGuardEnabled) return null
+  const parsed = parseGitCommitCommand(command)
+  if (!parsed) return null
+  const workspaceRoot = cfg.docGuardWorkspaceRoot
+  const repoRoot = await gitTopLevel(parsed.cwd, cfg.docGuardTimeoutMs)
+  if (!repoRoot) return null
+  try {
+    await access(join(repoRoot, 'docs-policy.json'))
+  } catch {
+    return null
+  }
+  const repos = await repoIndex(workspaceRoot)
+  const normalizedRoot = resolve(repoRoot)
+  const matched = repos
+    .map(repo => ({ ...repo, absolute: resolve(repo.path) }))
+    .filter(repo => normalizedRoot === repo.absolute || normalizedRoot.startsWith(repo.absolute + sep))
+    .sort((a, b) => b.absolute.length - a.absolute.length)[0]
+  if (!matched) {
+    logger?.warn?.('context-guard: 文档门禁未找到仓库登记: %s', repoRoot)
+    return null
+  }
+  const runCheck = deps.runCheck || defaultRunDocCheck
+  const result = await runCheck(matched.id, cfg)
+  if (result.ok) return null
+  const output = trimCheckOutput(result.output)
+  const reason = `文档检查未通过，已阻止 git commit（仓库 ${matched.id}）：\n${output}`
+  return {
+    kind: 'deny',
+    reason,
+    displayReason: {
+      en: `Documentation check failed for ${matched.id}; commit blocked.\n${output}`,
+      zh: reason,
+    },
+  }
 }
 
 /** 从 session 的已提交事件里取标题、最近用户消息和最近工具调用。 */
@@ -145,6 +251,11 @@ function guardConfig(config) {
       keepRecentInActiveSession: config.keepRecentInActiveSession,
     }).filter(([, value]) => value !== undefined)),
     cleanupIntervalMs: Number(config.cleanupIntervalMs) || 5 * 60 * 1000,
+    docGuardEnabled: config.docGuardEnabled !== false,
+    docGuardWorkspaceRoot: typeof config.docGuardWorkspaceRoot === 'string' && config.docGuardWorkspaceRoot
+      ? config.docGuardWorkspaceRoot
+      : '/home/zh/www',
+    docGuardTimeoutMs: Number(config.docGuardTimeoutMs) || 30000,
   }
 }
 
@@ -400,6 +511,10 @@ export function apply(ctx, config = {}) {
         if (verdict.kind === 'deny') return verdict
         asks.push(verdict)
       }
+    }
+    if (cfg.docGuardEnabled && cfg.toolNames.includes(exec?.name)) {
+      const docDecision = await docGuardDecision(command, cfg, ctx.logger)
+      if (docDecision?.kind === 'deny') return docDecision
     }
     if (cfg.toolNames.includes(exec?.name)) {
       const check = turnBudget.checkCall(sessionIdOf(exec))

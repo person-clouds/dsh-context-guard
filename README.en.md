@@ -107,6 +107,12 @@ Default host allowlist: `localhost`, `127.0.0.1`, `[::1]`, `github.com`, `gitee.
 - Changed result: `[context-guard:diff]` with only the changed block between common prefix/suffix.
 - The cache is in-process memory and is lost on restart; this is an intentional safety choice.
 
+## Documentation commit guard
+
+`tools/pre-execute` recognizes `git commit` (including `git -C <dir> commit` and `cd <dir> && git commit`) and resolves the target repository. If it has `docs-policy.json`, the workspace `scripts/check.sh --repo <repo>` runs; a failure returns `deny` with the failing items. It never runs `--tag` automatically and never guesses `implementation_status`. Non-commit commands and repositories without `docs-policy.json` are not affected.
+
+Config: `docGuardEnabled` (default `true`), `docGuardWorkspaceRoot` (default `/home/zh/www`), `docGuardTimeoutMs` (default `30000`). Restart the DSH profile after changing them.
+
 ## Data directories
 
 ```text
@@ -212,6 +218,9 @@ Notes:
         dedupeMinChars: 800
         dedupTtlMs: 600000
         riskCheckEnabled: true
+        docGuardEnabled: true
+        docGuardWorkspaceRoot: /home/zh/www
+        docGuardTimeoutMs: 30000
         # riskToolNames: [bash, persistent-bash, terminal-bash, web_fetch]
         # riskAllowHosts: [localhost, 127.0.0.1, github.com]
         retentionDays: 7

@@ -1,9 +1,9 @@
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
-import { mkdir, mkdtemp, readFile, readdir, utimes, writeFile } from 'node:fs/promises'
+import { chmod, copyFile, mkdir, mkdtemp, readFile, readdir, utimes, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { name, apply } from './index.js'
+import { name, apply, docGuardDecision, parseGitCommitCommand } from './index.js'
 import { budgetFor, classifyCommand, renderBounded } from './lib/budget.js'
 import { lintCommand, lintDecision } from './lib/command-lint.js'
 import { TurnBudget } from './lib/turn-budget.js'
@@ -376,5 +376,39 @@ const fallbackOverview = spawnSync('bash', [inspect, 'overview'], {
 assert.equal(fallbackOverview.status, 0, fallbackOverview.stderr)
 assert.match(fallbackOverview.stdout, /## 系统/)
 assert.match(fallbackOverview.stdout, /kernel:/)
+
+
+// 文档提交门禁：真实 check.sh + 临时 fixture，坏文档拒绝、修复后放行
+assert.deepEqual(parseGitCommitCommand('git commit -m x'), { cwd: null })
+assert.deepEqual(parseGitCommitCommand('cd /tmp/repo && git commit -m x'), { cwd: '/tmp/repo' })
+assert.deepEqual(parseGitCommitCommand('git -C /tmp/repo commit -m x'), { cwd: '/tmp/repo' })
+assert.equal(parseGitCommitCommand('git log --grep commit'), null)
+
+const guardRoot = await mkdtemp(join(tmpdir(), 'dsh-doc-guard-'))
+const guardRepo = join(guardRoot, 'repo')
+await mkdir(join(guardRoot, 'scripts'), { recursive: true })
+await mkdir(join(guardRepo, 'doc'), { recursive: true })
+await copyFile(new URL('../../workspace/scripts/check.sh', import.meta.url), join(guardRoot, 'scripts/check.sh'))
+await copyFile(new URL('../../workspace/scripts/check_docs.py', import.meta.url), join(guardRoot, 'scripts/check_docs.py'))
+await chmod(join(guardRoot, 'scripts/check.sh'), 0o755)
+await writeFile(join(guardRoot, 'repos.yaml'), `version: 1\nrepos:\n  - id: fixture\n    path: ${guardRepo}\n`)
+await writeFile(join(guardRepo, 'docs-policy.json'), JSON.stringify({
+  version: 1,
+  include: ['doc/**'],
+  defaults: { audience: 'ai', status: 'current' },
+  rules: [],
+  line_limits: { ai: 8 },
+  legacy_over_limit: [],
+}, null, 2))
+spawnSync('git', ['init', '-q', guardRepo])
+await writeFile(join(guardRepo, 'doc/bad.md'), '# 坏文档\n' + Array.from({ length: 12 }, (_, index) => `第 ${index} 行`).join('\n') + '\n')
+spawnSync('git', ['-C', guardRepo, 'add', '.'])
+const docGuardCfg = { docGuardEnabled: true, docGuardWorkspaceRoot: guardRoot, docGuardTimeoutMs: 30000 }
+const blocked = await docGuardDecision(`git -C ${guardRepo} commit -m test`, docGuardCfg)
+assert.equal(blocked?.kind, 'deny')
+assert.match(blocked.reason, /文档检查未通过/)
+await writeFile(join(guardRepo, 'doc/bad.md'), '---\naudience: ai\nstatus: current\n---\n\n# 已修复\n')
+const docAllowed = await docGuardDecision(`git -C ${guardRepo} commit -m test`, docGuardCfg)
+assert.equal(docAllowed, null)
 
 console.log('ok')
