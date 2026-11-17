@@ -70,7 +70,7 @@ Unbounded commands (`cat`, `journalctl` without `--since`/`-n`, `find /`, `du /`
 
 ## Per-turn gates and command hints
 
-- Call gate: the 21st bash call in a turn returns one `ask` (not repeated in that turn); the 40th and later calls return `deny`. `turn/start` resets counters; if that event is missing, the plugin falls back to per-session counting and logs a warning.
+- Call gate: the 21st bash call in a turn returns one `ask` (not repeated in that turn); the 40th and later calls return `deny`. `turn/start` resets counters; if that event is missing, the plugin falls back to per-session counting and logs a warning. Gate messages show both the bash-call count for the turn and the current `session step`, which are different counters.
 - Output gate: after actual emitted context exceeds `maxTurnOutputChars=40000` in a turn, later results over `exhaustedOutputChars=800` are fully archived while the context receives at most 800 characters plus the path.
 - Command enforcement: `commandLintMode: deny` by default. Whole-file `cat` points to the `read` tool (or `sed -n '1,120p'`); unscoped recursive search points to `grep`/`glob` or `--glob '!**/node_modules/**'`; bare `curl .../api/...` points to `| jq '{field1,field2}'` or `-o /tmp/out.json` followed by a query.
 - DSH does not allow `tools/pre-execute` to rewrite tool arguments, so the plugin cannot silently turn `cat` into `read`; it denies the current call and puts the replacement in the model-visible `reason`, letting the model retry with a bounded call.
@@ -92,6 +92,8 @@ Default coverage:
 | System damage | shutdown, stopping services, firewall flush, killing processes, deleting containers/volumes/K8s resources |
 | Databases | `DROP DATABASE/TABLE`, `TRUNCATE TABLE`, `DELETE FROM` without `WHERE` |
 | Privilege/history | `sudo`, `doas`, `su -`, `history -c` |
+
+`rm` is exempt from `destructive-rm` only when every target is under `/tmp`, `/var/tmp`, `$TMPDIR` or `${TMPDIR}`. Targets equal to the temp root, or containing `..`, `*`, `?`, `[`, plus `sudo`, `xargs`, command substitution and backticks are not exempt. `repo-delete`, `find-delete` and other rules are unchanged.
 
 Default host allowlist: `localhost`, `127.0.0.1`, `[::1]`, `github.com`, `gitee.com`, `raw.githubusercontent.com`; override with `riskAllowHosts`. Rules are regex heuristics and can both over- and under-report; high-risk production operations still need human review.
 

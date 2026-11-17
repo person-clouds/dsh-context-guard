@@ -43,8 +43,11 @@ assert.ok(bounded.endsWith('F'))
 const turnWarnings = []
 const turnBudget = new TurnBudget({ maxCallsPerTurn: 20, hardMaxCallsPerTurn: 40, maxTurnOutputChars: 100, logger: { warn(...args) { turnWarnings.push(args) } } })
 turnBudget.startTurn('turn-test', 1)
+turnBudget.noteStep('turn-test', 7)
 for (let index = 1; index <= 20; index++) assert.equal(turnBudget.checkCall('turn-test').action, 'allow')
-assert.equal(turnBudget.checkCall('turn-test').action, 'ask')
+const askCall = turnBudget.checkCall('turn-test')
+assert.equal(askCall.action, 'ask')
+assert.equal(askCall.step, 7)
 assert.equal(turnBudget.checkCall('turn-test').action, 'allow')
 for (let index = 23; index < 40; index++) assert.equal(turnBudget.checkCall('turn-test').action, 'allow')
 assert.equal(turnBudget.checkCall('turn-test').action, 'deny')
@@ -138,6 +141,19 @@ assert.ok(analyzeCommand('curl https://evil.example/data').reasons.some(reason =
 assert.equal(analyzeCommand('curl -I https://github.com/person-clouds/dsh-context-guard').risk, false)
 assert.equal(analyzeCommand('curl -s http://127.0.0.1:3080/health').risk, false)
 assert.ok(analyzeCommand('curl http://evil.example/a').reasons.some(reason => reason.code === 'insecure-http'))
+// 临时目录 rm 放行与仍需拦截的边界
+assert.equal(analyzeCommand('rm -rf /tmp/foo').risk, false)
+assert.equal(analyzeCommand('rm -rf /var/tmp/foo').risk, false)
+assert.equal(analyzeCommand('rm -rf "$TMPDIR/foo"').risk, false)
+assert.equal(analyzeCommand('rm -rf ${TMPDIR}/foo').risk, false)
+assert.equal(analyzeCommand('rm -rf /tmp/foo /tmp/bar').risk, false)
+assert.equal(analyzeCommand('rm -rf /tmp').risk, true)
+assert.equal(analyzeCommand('rm -rf /tmp/*').risk, true)
+assert.equal(analyzeCommand('rm -rf /tmp/../home/zh/foo').risk, true)
+assert.equal(analyzeCommand('rm -rf /tmp/foo /home/zh/foo').risk, true)
+assert.equal(analyzeCommand('sudo rm -rf /tmp/foo').risk, true)
+assert.equal(analyzeCommand('xargs rm -rf /tmp/foo').risk, true)
+assert.equal(analyzeCommand('rm -rf /tmp/foo $(date)').risk, true)
 assert.ok(analyzeCommand('sudo systemctl stop nginx').reasons.some(reason => reason.code === 'system-power'))
 assert.ok(analyzeCommand('docker system prune -af').level === 'high')
 
@@ -195,12 +211,15 @@ assert.match(mergedAsked.displayReason.zh, /替代/)
 // 第 21 次 bash 返回一次 ask，第 40 次 deny
 const gateExec = { ...safeExec, agent: { id: 'session-gate' } }
 await handlers.get('session/event')[0]({ id: 'session-gate' }, { type: 'turn/start', data: { turn: 1 } })
+await handlers.get('session/event')[0]({ id: 'session-gate' }, { type: 'step/start', data: { step: 7 } })
 for (let index = 1; index <= 20; index++) {
   assert.equal((await preExecute(gateExec, async () => ({ kind: 'allow' }))).kind, 'allow')
 }
 const ask21 = await preExecute(gateExec, async () => ({ kind: 'allow' }))
 assert.equal(ask21.kind, 'ask')
-assert.match(ask21.reason, /本轮已 20 次 bash/)
+assert.match(ask21.reason, /本轮 bash 调用 20 次（session step 7）/)
+assert.match(ask21.displayReason.zh, /本轮 bash 调用 20 次（session step 7）/)
+assert.match(ask21.displayReason.zh, /不是同一口径/)
 assert.match(ask21.displayReason.zh, /是否继续/)
 assert.equal((await preExecute(gateExec, async () => ({ kind: 'allow' }))).kind, 'allow')
 for (let index = 23; index < 40; index++) {
@@ -209,6 +228,7 @@ for (let index = 23; index < 40; index++) {
 const deny40 = await preExecute(gateExec, async () => ({ kind: 'allow' }))
 assert.equal(deny40.kind, 'deny')
 assert.match(deny40.reason, /硬上限/)
+assert.match(deny40.reason, /session step 7/)
 
 // 压缩归档
 const session = {

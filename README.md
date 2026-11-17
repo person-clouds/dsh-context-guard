@@ -70,7 +70,7 @@ dsh --profile web --dump-config | grep -E "context-guard|maxOutputChars|tool-res
 
 ## 单轮门禁与命令提示
 
-- 调用门禁：同一轮第 21 次 bash 返回一次 `ask`，同一轮不重复弹；第 40 次起 `deny`。监听 `session/event` 的 `turn/start` 清零；缺少该事件时退化为按 session 计数并记 warning。
+- 调用门禁：同一轮第 21 次 bash 返回一次 `ask`，同一轮不重复弹；第 40 次起 `deny`。监听 `session/event` 的 `turn/start` 清零；缺少该事件时退化为按 session 计数并记 warning。门禁文案同时显示“本轮 bash 调用次数”和当前 `session step`，两者不是同一口径。
 - 累计输出门禁：本轮实际进入上下文的字符数超过 `maxTurnOutputChars=40000` 后，后续超过 `exhaustedOutputChars=800` 的结果完整落盘，上下文只留 800 字符以内摘要 + 路径。
 - 命令拦截：默认 `commandLintMode: deny`。整文件 `cat` 提示改用 `read` 工具（或 `sed -n '1,120p'`）；无排除递归搜索提示改用 `grep`/`glob` 工具或加 `--glob '!**/node_modules/**'`；裸 `curl .../api/...` 提示改用 `| jq '{field1,field2}'` 或 `-o /tmp/out.json` 后再查询。
 - DSH 不支持在 `tools/pre-execute` 中改写工具参数，所以插件不会自动把 `cat` 替换成 `read`；它只拒绝当前调用，并在模型可见的 `reason` 中给出替代命令，由模型重新发起有界调用。
@@ -94,6 +94,8 @@ dsh --profile web --dump-config | grep -E "context-guard|maxOutputChars|tool-res
 | 系统破坏 | 关机、停服务、清防火墙、杀进程、删容器/数据卷/K8s 资源 |
 | 数据库 | `DROP DATABASE/TABLE`、`TRUNCATE TABLE`、无 `WHERE` 的 `DELETE FROM` |
 | 提权/清历史 | `sudo`、`doas`、`su -`、`history -c` |
+
+`rm` 目标全部位于 `/tmp`、`/var/tmp`、`$TMPDIR` / `${TMPDIR}` 下时跳过 `destructive-rm`；目标等于临时目录本身、含 `..`/`*`/`?`/`[`，或使用 `sudo`、`xargs`、命令替换/反引号时不放行。`repo-delete`、`find-delete` 等规则不受影响。
 
 默认链接白名单：`localhost`、`127.0.0.1`、`[::1]`、`github.com`、`gitee.com`、`raw.githubusercontent.com`；可用 `riskAllowHosts` 覆盖。规则是正则启发式，可能误报或漏报，高风险生产操作仍应人工复核。
 

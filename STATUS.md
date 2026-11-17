@@ -21,6 +21,7 @@
 - [x] `scripts/inspect.sh`：overview/service/app/logs/git/ports/docker/http/report，只读、有界输出、可选 linuxops 只读子命令；
 - [x] `tools/pre-execute` 风险命令警示：删除/仓库删除、git 强推/重置、下载执行、未知链接（含 `web_fetch`）、关机停服、容器/数据库删除、提权等返回 `ask` 让用户确认；不覆盖已有 deny/cancel/ask。
 - [x] 单轮 bash 调用门禁：第 21 次起 `ask`（同一轮只问一次），第 40 次起 `deny`；`turn/start` 重置，缺事件时按 session 退化计数并 warning；
+- [x] 临时目录 `rm` 豁免：目标全部位于 `/tmp`、`/var/tmp`、`$TMPDIR`/`${TMPDIR}` 时跳过 `destructive-rm`；临时目录本身、`..`/通配符、`sudo`/`xargs`/命令替换仍拦截；门禁文案同时显示 bash 调用次数与 session step；
 - [x] 单轮累计输出门禁：本轮 emitted 超过 40000 字符后，后续 >800 字符结果完整落盘，上下文只回 ≤800 字符摘要 + 路径；
 - [x] 命令形态拦截：整文件 `cat`、无排除的 `~/.dsh`/家目录递归搜索、裸 `curl` API 默认返回 `deny` 并给 `read`/`grep`/`jq` 等替代；可配 `commandLintMode: ask`；同时注册系统提示引导；`ask` 模式下与风险规则合并为一次 `ask`；
 - [x] `scripts/apply-profile.sh` 修复：检查 profile 已安装 scoped 包和失效的 `dsh-superagent` link；修正包名；删除顶层 `persistent-bash` 旧块，改为覆盖 minimal preset 的 `config.plugins` 并设 `maxOutputChars=65536`；`tool-result-pruner=6000/3000/1500`；重复执行幂等。
@@ -59,3 +60,4 @@
 | 2026-11-17 | 回放 `session-277f61e5...` 77 条工具结果 | 原始 205,616 chars → emitted 48,800 chars（-76.3%），低于 ≤60,000 目标 |
 | 2026-11-17 | `npm pack --dry-run` | 20 files / 32.2 kB；包含新增 `lib/turn-budget.js`、`lib/command-lint.js` |
 | 2026-11-17 | `dsh --profile web --dump-config` | 失败：沙箱写 `~/.dsh/profiles/web/cordis.yml` EROFS；待宿主机重启后验证 |
+| 2026-11-17 | `node test.mjs` | ok；新增临时目录 rm 豁免边界、session step 记录与门禁文案断言 |

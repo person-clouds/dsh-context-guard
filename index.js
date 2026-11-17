@@ -171,14 +171,20 @@ function mergeAskDecisions(decisions) {
   }
 }
 
+function stepLabel(step, locale) {
+  if (step === null || step === undefined || step === '') return locale === 'en' ? 'unknown' : '未知'
+  return String(step)
+}
+
 function callLimitAskDecision(check) {
+  const step = stepLabel(check.step, 'zh')
   return {
     kind: 'ask',
-    reason: `context-guard call-limit: 本轮已 ${check.maxCallsPerTurn} 次 bash，是否继续（第 ${check.count} 次）`,
+    reason: `context-guard call-limit: 本轮 bash 调用 ${check.maxCallsPerTurn} 次（session step ${step}），是否继续（本轮第 ${check.count} 次 bash 调用）`,
     displayReason: {
-      en: `This turn has already used ${check.maxCallsPerTurn} bash calls. Continue with call ${check.count} of at most ${check.hardMaxCallsPerTurn}?`,
-      zh: `本轮已 ${check.maxCallsPerTurn} 次 bash 调用，是否继续？
-当前是第 ${check.count} 次；第 ${check.hardMaxCallsPerTurn} 次起会拒绝执行。建议合并命令、改用 inspect.sh，或先汇报进展。`,
+      en: `This turn has already used ${check.maxCallsPerTurn} bash calls (session step ${stepLabel(check.step, 'en')}). Continue with bash call ${check.count} of at most ${check.hardMaxCallsPerTurn}? Bash calls and session step are different counters.`,
+      zh: `本轮 bash 调用 ${check.maxCallsPerTurn} 次（session step ${step}），是否继续？
+当前是本轮第 ${check.count} 次 bash 调用；第 ${check.hardMaxCallsPerTurn} 次起会拒绝执行。注意：bash 调用次数与 session step 不是同一口径。建议合并命令、改用 inspect.sh，或先汇报进展。`,
     },
   }
 }
@@ -186,7 +192,7 @@ function callLimitAskDecision(check) {
 function callLimitDenyDecision(check) {
   return {
     kind: 'deny',
-    reason: `context-guard call-limit: 本轮已 ${check.count} 次 bash，达到 ${check.hardMaxCallsPerTurn} 次硬上限；请拆任务或先汇报进展。`,
+    reason: `context-guard call-limit: 本轮 bash 调用 ${check.count} 次（session step ${stepLabel(check.step, 'zh')}），达到 ${check.hardMaxCallsPerTurn} 次硬上限；请拆任务或先汇报进展。`,
   }
 }
 
@@ -347,6 +353,10 @@ export function apply(ctx, config = {}) {
   ctx.on('session/event', (session, event) => {
     if (event.type === 'turn/start') {
       turnBudget.startTurn(session?.id || 'unknown-session', event.data?.turn)
+      return
+    }
+    if (event.type === 'step/start') {
+      turnBudget.noteStep(session?.id || 'unknown-session', event.data?.step)
       return
     }
     if (event.type === 'compaction/start') {
