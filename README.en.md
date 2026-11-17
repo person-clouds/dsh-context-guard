@@ -41,8 +41,9 @@ task/dsh-context-guard/scripts/apply-profile.sh
 The script:
 
 - replaces the old `compaction-archive` insert with `context-guard` and fixes the scoped package name `@fenghoer/dsh-context-guard`; if `node_modules/@fenghoer/dsh-context-guard` is missing in a profile, it prints the `dsh plugin --profile <p> add link:...` command to run and exits non-zero;
-- aligns `persistent-bash` `maxOutputChars` to `65536`, otherwise the plugin only sees the truncated 16K;
-- aligns the official `tool-result-pruner` to `6000/3000/1500`.
+- removes the top-level `persistent-bash` block that causes `patch: entry "persistent-bash" not found`, and instead overlays the complete `minimal` preset `config.plugins`, setting its `persistent-bash` `maxOutputChars` to `65536`; rerun after upgrading DSH;
+- aligns the top-level official `tool-result-pruner` to `6000/3000/1500`;
+- if `node_modules/dsh-superagent` is a link to a missing path, prints the fix command `dsh plugin --profile <p> add link:/home/zh/www/dsh-superagent`.
 
 Verify:
 

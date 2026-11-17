@@ -41,8 +41,9 @@ task/dsh-context-guard/scripts/apply-profile.sh
 脚本做三件事：
 
 - 把旧的 `compaction-archive` 插入项改成 `context-guard`，并修正为 scoped 包名 `@fenghoer/dsh-context-guard`；如果对应 profile 的 `node_modules/@fenghoer/dsh-context-guard` 不存在，会提示先执行 `dsh plugin --profile <p> add link:...` 并以非零退出；
-- 把 `persistent-bash` 的 `maxOutputChars` 对齐为 `65536`，否则插件只能拿到被截断的 16K；
-- 把官方 `tool-result-pruner` 对齐为 `6000/3000/1500`。
+- 删除会报 `patch: entry "persistent-bash" not found` 的顶层旧块，改为覆盖 `minimal` preset 的完整 `config.plugins`，并把其中 `persistent-bash` 的 `maxOutputChars` 对齐为 `65536`；DSH 升级后需重跑脚本；
+- 把顶层官方 `tool-result-pruner` 对齐为 `6000/3000/1500`；
+- 若 `node_modules/dsh-superagent` 是指向不存在路径的 link，会提示用 `dsh plugin --profile <p> add link:/home/zh/www/dsh-superagent` 修复。
 
 验证：
 
