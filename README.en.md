@@ -105,6 +105,8 @@ Default coverage:
 
 Default host allowlist: `localhost`, `127.0.0.1`, `[::1]`, `github.com`, `gitee.com`, `raw.githubusercontent.com`; override with `riskAllowHosts`. Rules are regex heuristics and can both over- and under-report; high-risk production operations still need human review.
 
+Next to “allow once”, the risk approval card offers “always allow”. The Host resolves a short-lived token from the approval reason back to the original command, re-parses it, and stores a narrow rule in `${DSH_HOME:-~/.dsh}/context-guard/risk-allow.json`. Ordinary risks store the hash of the exact normalized command; when the only risk is an unknown link, only that host is stored. Later only those exact commands/hosts skip the risk `ask`; other rules, command-shape lint, and DSH permissions still apply. Rules never wildcard a code such as `destructive-rm`. Set `riskAutoAllowEnabled: false` to disable the button and auto-allow, or `riskRuleFile` to move the rule file; delete the JSON to revoke all rules.
+
 ## Deduplication and diffs
 
 - Cache key: `session + tool + args`.
@@ -226,6 +228,8 @@ Notes:
         dedupeMinChars: 800
         dedupTtlMs: 600000
         riskCheckEnabled: true
+        riskAutoAllowEnabled: true
+        # riskRuleFile: /home/zh/.dsh/context-guard/risk-allow.json
         docGuardEnabled: true
         docGuardWorkspaceRoot: /home/zh/www
         docGuardTimeoutMs: 30000
@@ -243,7 +247,7 @@ Notes:
 cd dsh-context-guard && npm test
 ```
 
-Coverage: compaction archive, command classification/budgets, bounded rendering, large-output archival, deduplication, line-level diffs, per-turn call and output gates, command-shape deny/ask with merged `ask`, metrics, expiry cleanup, risky-command detection, plus `inspect.sh` syntax and help.
+Coverage: compaction archive, command classification/budgets, bounded rendering, large-output archival, deduplication, line-level diffs, per-turn call and output gates, command-shape deny/ask with merged `ask`, metrics, expiry cleanup, risky-command detection and narrow allow rules, plus `inspect.sh` syntax and help.
 
 ## Boundaries
 

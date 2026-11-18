@@ -17,6 +17,7 @@ import { DEFAULT_DEDUPE_MIN_CHARS, DedupCache, dedupKey, diffLines } from './lib
 import { MetricsRecorder, metricOf } from './lib/metrics.js'
 import { cleanupOutputs } from './lib/cleanup.js'
 import { analyzeCommand, riskAskDecision } from './lib/risk.js'
+import { PendingRiskRules, RISK_RULE_ENDPOINT, RiskRuleStore, filterRiskByRules, ruleSpecsFor } from './lib/risk-allow.js'
 import { lintCommand, lintDecision } from './lib/command-lint.js'
 import { TurnBudget } from './lib/turn-budget.js'
 import { HARD_LIMIT_DRAFT_MARKER } from './lib/continue-draft.js'
@@ -219,6 +220,10 @@ function guardConfig(config) {
       ? config.riskToolNames
       : [...new Set([...toolNames, 'web_fetch'])],
     riskAllowHosts: Array.isArray(config.riskAllowHosts) ? config.riskAllowHosts : undefined,
+    riskAutoAllowEnabled: config.riskAutoAllowEnabled !== false,
+    riskRuleFile: typeof config.riskRuleFile === 'string' && config.riskRuleFile
+      ? config.riskRuleFile
+      : join(dshHome(), 'context-guard', 'risk-allow.json'),
     commandLintEnabled: config.commandLintEnabled !== false,
     commandLintMode: config.commandLintMode === 'ask' ? 'ask' : 'deny',
     commandGuidanceEnabled: config.commandGuidanceEnabled !== false,
@@ -441,9 +446,94 @@ async function guardToolResult(exec, result, decision, cfg, cache, metrics, turn
   }
 }
 
+
+function sendJson(res, status, body) {
+  if (res.headersSent || res.writableEnded) return
+  res.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
+  res.end(JSON.stringify(body))
+}
+
+/** 审批卡「始终允许」的 host 端点：客户端仅提交短期 token，避免回传/伪造命令正文。 */
+export function createRiskRuleHandler({ store, pending, riskAllowHosts, logger }) {
+  return (req, res) => {
+    if (req.method === 'GET') {
+      void store.list()
+        .then(rules => sendJson(res, 200, { ok: true, rules }))
+        .catch(error => {
+          logger?.warn?.('context-guard: 读取风险规则失败: %s', error)
+          sendJson(res, 500, { ok: false, error: 'rule-store-unavailable' })
+        })
+      return
+    }
+    if (req.method !== 'POST') {
+      sendJson(res, 405, { ok: false, error: 'method-not-allowed' })
+      return
+    }
+    let body = ''
+    req.on('data', chunk => {
+      body += chunk.toString('utf8')
+      if (body.length > 16 * 1024) req.destroy()
+    })
+    req.on('end', async () => {
+      try {
+        const parsed = JSON.parse(body)
+        if (parsed?.action === 'allow') {
+          const entry = pending.take(parsed.token)
+          if (!entry) {
+            sendJson(res, 410, { ok: false, error: 'approval-rule-expired' })
+            return
+          }
+          const risk = analyzeCommand(entry.command, { allowHosts: riskAllowHosts })
+          if (!risk.risk) {
+            sendJson(res, 409, { ok: false, error: 'command-no-longer-risky' })
+            return
+          }
+          const specs = ruleSpecsFor(entry.command, risk)
+          if (specs.length === 0) {
+            sendJson(res, 400, { ok: false, error: 'no-rule-parsed' })
+            return
+          }
+          const rules = await store.add(specs)
+          sendJson(res, 200, { ok: true, rules })
+          return
+        }
+        if (parsed?.action === 'revoke') {
+          const removed = await store.revoke(parsed.id)
+          sendJson(res, removed ? 200 : 404, { ok: removed })
+          return
+        }
+        sendJson(res, 400, { ok: false, error: 'unknown-action' })
+      } catch (error) {
+        logger?.warn?.('context-guard: 风险规则请求失败: %s', error)
+        sendJson(res, 400, { ok: false, error: 'invalid-request' })
+      }
+    })
+    req.on('error', () => sendJson(res, 400, { ok: false, error: 'invalid-request' }))
+  }
+}
+
 export function apply(ctx, config = {}) {
   const dir = typeof config.dir === 'string' && config.dir ? config.dir : undefined
   const cfg = guardConfig(config)
+  const riskRuleStore = new RiskRuleStore(cfg.riskRuleFile)
+  const pendingRiskRules = new PendingRiskRules()
+  if (cfg.riskAutoAllowEnabled) {
+    void riskRuleStore.load().catch(error => ctx.logger?.warn?.('context-guard: 加载风险规则失败: %s', error))
+    if (typeof ctx.inject === 'function') {
+      ctx.inject(['webServer'], routeCtx => {
+        routeCtx.effect(() => routeCtx.webServer.register({
+          kind: 'exact',
+          path: RISK_RULE_ENDPOINT,
+          handler: createRiskRuleHandler({
+            store: riskRuleStore,
+            pending: pendingRiskRules,
+            riskAllowHosts: cfg.riskAllowHosts,
+            logger: ctx.logger,
+          }),
+        }), 'context-guard: risk allow-rule route')
+      })
+    }
+  }
   const cache = new DedupCache({ ttlMs: cfg.dedupTtlMs, maxEntries: cfg.dedupMaxEntries })
   const metrics = new MetricsRecorder(cfg.metricsDir, { logger: ctx.logger })
   registerCommandGuidance(ctx, cfg)
@@ -494,10 +584,24 @@ export function apply(ctx, config = {}) {
 
     const asks = []
     if (cfg.riskCheckEnabled && cfg.riskToolNames.includes(exec?.name)) {
-      const risk = analyzeCommand(command, { allowHosts: cfg.riskAllowHosts })
+      let risk = analyzeCommand(command, { allowHosts: cfg.riskAllowHosts })
+      if (risk.risk && cfg.riskAutoAllowEnabled) {
+        try {
+          await riskRuleStore.load()
+          risk = filterRiskByRules(risk, command, riskRuleStore, cfg.riskAllowHosts)
+          if (!risk.risk) ctx.logger?.info?.('context-guard: 命中已放行规则: %s', risk.allowedBy)
+        } catch (error) {
+          ctx.logger?.warn?.('context-guard: 风险规则匹配失败，保持询问: %s', error)
+        }
+      }
       if (risk.risk) {
         ctx.logger?.info?.('context-guard: 风险命令待确认 (%s): %s', risk.level, risk.preview)
-        asks.push(riskAskDecision(risk))
+        const ask = riskAskDecision(risk)
+        if (cfg.riskAutoAllowEnabled) {
+          const token = pendingRiskRules.add(command, risk)
+          ask.reason = `${ask.reason}; rule-token: ${token}`
+        }
+        asks.push(ask)
       }
     }
     if (cfg.commandLintEnabled && cfg.toolNames.includes(exec?.name)) {

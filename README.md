@@ -107,6 +107,8 @@ dsh --profile web --dump-config | grep -E "context-guard|maxOutputChars|tool-res
 
 默认链接白名单：`localhost`、`127.0.0.1`、`[::1]`、`github.com`、`gitee.com`、`raw.githubusercontent.com`；可用 `riskAllowHosts` 覆盖。规则是正则启发式，可能误报或漏报，高风险生产操作仍应人工复核。
 
+风险审批卡在「允许一次」之外提供「始终允许」：Host 会按审批 reason 里的短期 token 取回原始命令并重新解析，只在 `${DSH_HOME:-~/.dsh}/context-guard/risk-allow.json` 保存窄规则。普通风险保存完全相同的规范化命令哈希；若风险仅来自未知链接，则只保存该主机。之后仅这类命令/主机跳过风险 `ask`，其它规则、命令形态拦截和 DSH 权限策略仍照常生效。规则不会按 `destructive-rm` 等代码做全量通配。可用 `riskAutoAllowEnabled: false` 关闭按钮与自动放行，或用 `riskRuleFile` 改规则文件位置；删除该 JSON 即可整体撤销。
+
 ## 去重与 diff
 
 - 缓存键：`session + tool + args`；
@@ -228,6 +230,8 @@ LINUXOPS_BIN="$HOME/.local/bin/linuxops" dsh-context-guard/scripts/inspect.sh re
         dedupeMinChars: 800
         dedupTtlMs: 600000
         riskCheckEnabled: true
+        riskAutoAllowEnabled: true
+        # riskRuleFile: /home/zh/.dsh/context-guard/risk-allow.json
         docGuardEnabled: true
         docGuardWorkspaceRoot: /home/zh/www
         docGuardTimeoutMs: 30000
@@ -245,7 +249,7 @@ LINUXOPS_BIN="$HOME/.local/bin/linuxops" dsh-context-guard/scripts/inspect.sh re
 cd dsh-context-guard && npm test
 ```
 
-测试覆盖：压缩归档、命令分类/预算、有界渲染、大输出落盘、去重、行级 diff、单轮调用与累计输出门禁、硬上限自动「继续」标记与 3 次预算、命令形态 deny/ask 与合并 `ask`、指标、过期清理、风险命令识别、文档提交门禁（坏文档拒绝、修复后放行）、`inspect.sh` 语法与帮助、Web 客户端语法。
+测试覆盖：压缩归档、命令分类/预算、有界渲染、大输出落盘、去重、行级 diff、单轮调用与累计输出门禁、硬上限自动「继续」标记与 3 次预算、命令形态 deny/ask 与合并 `ask`、指标、过期清理、风险命令识别与窄放行规则、文档提交门禁（坏文档拒绝、修复后放行）、`inspect.sh` 语法与帮助、Web 客户端语法。
 
 ## 边界
 

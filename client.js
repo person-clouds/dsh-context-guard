@@ -12,6 +12,8 @@ window.__ModuleLoader__.load({
     const MARKER = 'context-guard:hard-limit-draft'
     const MAX_PER_SESSION = 3
     const RESTORE_WINDOW_MS = 30 * 60 * 1000
+    const RISK_RULE_ENDPOINT = '/api/context-guard-risk-rule'
+    const RISK_RULE_TOKEN_RE = /rule-token:\s*([a-f0-9]{16,64})/
     const budgets = new Map()
     let pluginCtx
 
@@ -69,6 +71,67 @@ window.__ModuleLoader__.load({
       return null
     }
 
+
+    function riskRuleToken(reason) {
+      const match = RISK_RULE_TOKEN_RE.exec(String(reason || ''))
+      return match ? match[1] : null
+    }
+
+    function isRiskApproval(interaction) {
+      return interaction?.kind === 'approval' &&
+        typeof interaction.reason === 'string' &&
+        interaction.reason.includes('context-guard risk check') &&
+        riskRuleToken(interaction.reason) !== null
+    }
+
+    function preferredText(approval) {
+      const display = approval.displayReason
+      if (display && typeof display === 'object') {
+        const language = String(globalThis.navigator?.language || '').toLowerCase()
+        if (language.startsWith('zh') && typeof display.zh === 'string') return display.zh
+        if (typeof display.en === 'string') return display.en
+      }
+      return approval.reason
+    }
+
+    function riskDescription() {
+      const language = String(globalThis.navigator?.language || '').toLowerCase()
+      if (language.startsWith('zh')) {
+        return '点击「始终允许」会把这条命令解析成窄规则：只自动放行完全相同的命令；若风险仅来自未知链接，则只放行该主机。高风险规则不会扩展到其它命令。'
+      }
+      return '“Always allow” parses this command into a narrow rule: only the exact same command is auto-allowed. If the risk is only an unknown link, only that host is allowed. High-risk rules never expand to other commands.'
+    }
+
+    async function saveRiskRuleAndAllow(approval) {
+      const token = riskRuleToken(approval.reason)
+      if (!token) throw new Error('missing risk rule token')
+      const response = await fetch(RISK_RULE_ENDPOINT, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ action: 'allow', token }),
+      })
+      const body = await response.json().catch(() => null)
+      if (!response.ok || body?.ok !== true) {
+        throw new Error(body?.error || `risk rule request failed: ${response.status}`)
+      }
+      await approval.answer('allowed-once')
+    }
+
+    function RiskApprovalSeat(props) {
+      const approval = props.matched
+      return props.renderFactorySlot('conversation.approval.card', {
+        requestKey: approval.key,
+        title: preferredText(approval),
+        description: riskDescription(),
+        ...(approval.callId === undefined ? {} : { callId: approval.callId }),
+        canAnswer: () => approval.answerable,
+        allowLabel: props.t('allowOnce'),
+        onAllow: () => approval.answer('allowed-once'),
+        onReject: () => approval.answer('rejected'),
+        onAlways: () => saveRiskRuleAndAllow(approval),
+      })
+    }
+
     const inject = ['slots', 'sessions']
     function apply(ctx) {
       pluginCtx = ctx
@@ -77,6 +140,12 @@ window.__ModuleLoader__.load({
         id: 'context-guard-continue-draft',
         order: 100,
       }, ContinueDraftSeat))
+      ctx.slots.inject('conversation.composer', () => ctx.slots.register({
+        name: 'conversation.composer',
+        priority: 0,
+        locale: 'approval',
+        select: ({ pendingInteraction }) => isRiskApproval(pendingInteraction) ? pendingInteraction : null,
+      }, RiskApprovalSeat))
     }
 
     exports.apply = apply

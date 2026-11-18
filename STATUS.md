@@ -1,7 +1,7 @@
 # STATUS — dsh-context-guard
 
-- 更新时间：2026-11-18
-- 一句话：DSH 工具输出预算/落盘、去重、单轮调用/输出门禁、硬上限后 Web 自动填入「继续」、命令形态拦截、风险确认、只读诊断、压缩归档与指标。
+- 更新时间：2026-11-19
+- 一句话：DSH 工具输出预算/落盘、去重、单轮调用/输出门禁、硬上限后 Web 自动填入「继续」、命令形态拦截、风险确认与窄规则自动放行、只读诊断、压缩归档与指标。
 - 位置：`dsh-context-guard/`；代码与测试已完成，待宿主机安装包并执行 `scripts/apply-profile.sh` 修复 web/superagent profile。
 
 ## 已完成
@@ -26,6 +26,7 @@
 - [x] 临时目录 `rm` 豁免：目标全部位于 `/tmp`、`/var/tmp`、`$TMPDIR`/`${TMPDIR}` 时跳过 `destructive-rm`；临时目录本身、`..`/通配符、`sudo`/`xargs`/命令替换仍拦截；门禁文案同时显示 bash 调用次数与 session step；
 - [x] 风险误报收敛：`sudo -n true`（及 `sudo -n -v`）与 `sudo -n` 只读检查命令（如 `ls`、`systemctl status`）不再触发 `privilege-escalation`；`rm` 目标全部位于 `test`/`tests`/`__tests__`/`test-*` 等测试目录时与临时目录一样跳过 `destructive-rm`；`touch <write-test 文件> && rm <同一文件>`、`f=$(mktemp /tmp/...) && rm -f "$f"` 自清理写权限探测同样放行；
 - [x] 单轮累计输出门禁：本轮 emitted 超过 40000 字符后，后续 >800 字符结果完整落盘，上下文只回 ≤800 字符摘要 + 路径；
+- [x] 风险审批「始终允许」：Host 按短期 token 取回原始命令并重新解析，保存精确命令哈希（链接风险仅保存主机）到 `context-guard/risk-allow.json`；后续命中只跳过风险 `ask`，不按规则代码通配；默认开启，可用 `riskAutoAllowEnabled`/`riskRuleFile` 配置；
 - [x] 命令形态拦截：整文件 `cat`、无排除的 `~/.dsh`/家目录递归搜索、裸 `curl` API 默认返回 `deny` 并给 `read`/`grep`/`jq` 等替代；可配 `commandLintMode: ask`；同时注册系统提示引导；`ask` 模式下与风险规则合并为一次 `ask`；
 - [x] 文档提交门禁：`tools/pre-execute` 解析 `git commit` 目标仓，已登记仓库按中央策略运行 `scripts/check.sh --repo`，失败 `deny`；配置 `docGuardEnabled`/`docGuardWorkspaceRoot`/`docGuardTimeoutMs`；不自动改文件；
 - [x] `scripts/apply-profile.sh` 修复：检查 profile 已安装 scoped 包和失效的 `dsh-superagent` link；修正包名；删除顶层 `persistent-bash` 旧块，改为覆盖 minimal preset 的 `config.plugins` 并设 `maxOutputChars=65536`；`tool-result-pruner=6000/3000/1500`；重复执行幂等。
@@ -71,4 +72,5 @@
 | 2026-11-17 | `node test.mjs`（硬上限自动继续） | ok；覆盖标记、同 turn 去重、同 session 3 次上限与 Web client 语法；待宿主机 Web 实机验收 |
 | 2026-11-18 | 真实会话 `session-4766b047...` 拒绝事件 + VM 集成测试 | 修复前脚本复现 `ctx is not defined` 且事件形状不匹配；修复后挂载即写入 `["继续"]`；`npm test` ok |
 | 2026-11-18 | 提醒/硬上限调整 | 单轮每 20 次 bash 返回一次 `ask`（黄色 pending 点）；第 80 次 deny + marker 并自动填「继续」；`maxCallsPerTurn=20`/`hardMaxCallsPerTurn=80` 显式写入 profile 模板与 `apply-profile.sh`；`npm test` ok |
+| 2026-11-19 | `npm test`（风险放行规则） | ok；覆盖精确命令只放行同一命令、链接规则只放行同一主机、下载执行仍拦截、审批 token 一次性消费与 Web「始终允许」按钮提交 |
 | 2026-11-18 | `npm test`（风险误报收敛） | ok；新增 `sudo -n true`/`-v` 与 `sudo -n` 只读命令、write-test 与 mktemp 自清理探测放行、test 目录 `rm` 豁免与危险边界断言 |
