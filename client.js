@@ -97,9 +97,9 @@ window.__ModuleLoader__.load({
     function riskDescription() {
       const language = String(globalThis.navigator?.language || '').toLowerCase()
       if (language.startsWith('zh')) {
-        return '点击「始终允许」会把这条命令解析成窄规则：只自动放行完全相同的命令；若风险仅来自未知链接，则只放行该主机。高风险规则不会扩展到其它命令。'
+        return '点击「始终允许」会把命令解析成安全类规则：同一项目前缀下清理构建产物（node_modules、dist、build、.cache 等）会自动放行；未知链接只放行该主机；无法证明为安全类时只记住完全相同的命令。不会按高风险代码全量放行。'
       }
-      return '“Always allow” parses this command into a narrow rule: only the exact same command is auto-allowed. If the risk is only an unknown link, only that host is allowed. High-risk rules never expand to other commands.'
+      return '“Always allow” parses the command into a safe-class rule: cleaning build artifacts (node_modules, dist, build, .cache, …) under the same project prefix is auto-allowed; unknown links allow only that host; when no safe class can be proven, only the exact command is remembered. High-risk codes are never wildcarded.'
     }
 
     async function saveRiskRuleAndAllow(approval) {

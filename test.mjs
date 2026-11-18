@@ -257,6 +257,37 @@ const persistedRules = await ruleStore.list()
 assert.ok(persistedRules.some(rule => rule.kind === 'command'))
 assert.ok(persistedRules.some(rule => rule.kind === 'host' && rule.host === 'evil.example'))
 
+// 同类规则：构建产物清理按「项目前缀 + 产物目录」泛化，而不是只记一条命令
+const artifactCommand = 'rm -rf ./node_modules'
+const artifactRules = ruleSpecsFor(artifactCommand, analyzeCommand(artifactCommand))
+assert.equal(artifactRules.length, 1)
+assert.equal(artifactRules[0].kind, 'artifact-rm')
+const artifactStore = new RiskRuleStore(join(ruleDir, 'artifact-rules.json'))
+await artifactStore.add(artifactRules)
+assert.equal(filterRiskByRules(analyzeCommand('rm -rf ./dist'), 'rm -rf ./dist', artifactStore).risk, false)
+assert.equal(filterRiskByRules(analyzeCommand('rm -rf packages/a/build'), 'rm -rf packages/a/build', artifactStore).risk, false)
+assert.equal(filterRiskByRules(analyzeCommand('rm -rf ./src'), 'rm -rf ./src', artifactStore).risk, true)
+assert.equal(filterRiskByRules(analyzeCommand('rm -rf ./node_modules; rm -rf ./src'), 'rm -rf ./node_modules; rm -rf ./src', artifactStore).risk, true)
+assert.equal(filterRiskByRules(analyzeCommand('sudo rm -rf ./node_modules'), 'sudo rm -rf ./node_modules', artifactStore).risk, true)
+assert.equal(filterRiskByRules(analyzeCommand('rm -rf ./node_modules/*'), 'rm -rf ./node_modules/*', artifactStore).risk, false)
+assert.equal(filterRiskByRules(analyzeCommand('rm -rf ./node_modules/{..,src}'), 'rm -rf ./node_modules/{..,src}', artifactStore).risk, true)
+const homeArtifactRules = ruleSpecsFor('rm -rf ~/.cache/app', analyzeCommand('rm -rf ~/.cache/app'))
+assert.equal(homeArtifactRules[0].kind, 'artifact-rm')
+const homeArtifactStore = new RiskRuleStore(join(ruleDir, 'home-artifact-rules.json'))
+await homeArtifactStore.add(homeArtifactRules)
+assert.equal(filterRiskByRules(analyzeCommand('rm -rf ~/.cache/other'), 'rm -rf ~/.cache/other', homeArtifactStore).risk, false)
+assert.equal(filterRiskByRules(analyzeCommand('rm -rf ~/src'), 'rm -rf ~/src', homeArtifactStore).risk, true)
+const findCommand = "find ./node_modules -name '*.map' -delete"
+const findRules = ruleSpecsFor(findCommand, analyzeCommand(findCommand))
+assert.equal(findRules[0].kind, 'artifact-find')
+const findStore = new RiskRuleStore(join(ruleDir, 'find-rules.json'))
+await findStore.add(findRules)
+assert.equal(filterRiskByRules(analyzeCommand("find ./dist -name '*.log' -delete"), "find ./dist -name '*.log' -delete", findStore).risk, false)
+assert.equal(filterRiskByRules(analyzeCommand("find ./src -name '*.log' -delete"), "find ./src -name '*.log' -delete", findStore).risk, true)
+assert.equal(filterRiskByRules(analyzeCommand("find ./node_modules -name '*.map' -delete -exec rm {} +"), "find ./node_modules -name '*.map' -delete -exec rm {} +", findStore).risk, true)
+// 非可证明安全类仍退化为精确命令
+assert.equal(ruleSpecsFor('git reset --hard HEAD~1', analyzeCommand('git reset --hard HEAD~1'))[0].kind, 'command')
+
 // 审批卡「始终允许」token：host 只接受短期 token，放行后同命令不再 ask
 const routeStore = new RiskRuleStore(join(ruleDir, 'route-rules.json'))
 const pendingRules = new PendingRiskRules()
@@ -282,10 +313,10 @@ assert.equal(routeResult.status, 200)
 assert.equal(routeResult.body.ok, true)
 assert.equal(await pendingRules.take(routeToken), null)
 
-// pre-execute 使用同一规则文件：完全相同的命令自动放行，不同命令仍 ask
+// pre-execute 使用同一规则文件：同类构建产物清理自动放行，非产物目录仍 ask
 const autoRuleFile = join(ruleDir, 'auto-rules.json')
 const autoStore = new RiskRuleStore(autoRuleFile)
-await autoStore.add(ruleSpecsFor('rm -rf ./auto-data', analyzeCommand('rm -rf ./auto-data')))
+await autoStore.add(ruleSpecsFor('rm -rf ./node_modules', analyzeCommand('rm -rf ./node_modules')))
 const autoHandlers = new Map()
 apply({
   on(type, fn) {
@@ -295,9 +326,9 @@ apply({
   logger: { warn() {} },
 }, { dir, outputDir: join(dir, 'auto-output'), metricsDir: join(dir, 'auto-metrics'), thresholdChars: 3000, cleanupEnabled: false, riskRuleFile: autoRuleFile })
 const autoPre = autoHandlers.get('tools/pre-execute')[0]
-const autoAllowed = await autoPre({ name: 'bash', callId: 'call-auto-1', arguments: { command: 'rm -rf ./auto-data' }, agent: { id: 'session-auto' } }, async () => ({ kind: 'allow' }))
+const autoAllowed = await autoPre({ name: 'bash', callId: 'call-auto-1', arguments: { command: 'rm -rf ./dist' }, agent: { id: 'session-auto' } }, async () => ({ kind: 'allow' }))
 assert.equal(autoAllowed.kind, 'allow')
-const autoAsked = await autoPre({ name: 'bash', callId: 'call-auto-2', arguments: { command: 'rm -rf ./other-data' }, agent: { id: 'session-auto' } }, async () => ({ kind: 'allow' }))
+const autoAsked = await autoPre({ name: 'bash', callId: 'call-auto-2', arguments: { command: 'rm -rf ./src' }, agent: { id: 'session-auto' } }, async () => ({ kind: 'allow' }))
 assert.equal(autoAsked.kind, 'ask')
 assert.match(autoAsked.reason, /rule-token:/)
 
