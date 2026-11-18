@@ -1,7 +1,7 @@
 # STATUS — dsh-context-guard
 
-- 更新时间：2026-11-17
-- 一句话：DSH 工具输出预算/落盘、去重、单轮调用/输出门禁、命令形态拦截、风险确认、只读诊断、压缩归档与指标。
+- 更新时间：2026-11-18
+- 一句话：DSH 工具输出预算/落盘、去重、单轮调用/输出门禁、硬上限后 Web 自动填入「继续」、命令形态拦截、风险确认、只读诊断、压缩归档与指标。
 - 位置：`task/dsh-context-guard/`；代码与测试已完成，待宿主机安装包并执行 `scripts/apply-profile.sh` 修复 web/superagent profile。
 
 ## 已完成
@@ -21,7 +21,10 @@
 - [x] `scripts/inspect.sh`：overview/service/app/logs/git/ports/docker/http/report，只读、有界输出、可选 linuxops 只读子命令；
 - [x] `tools/pre-execute` 风险命令警示：删除/仓库删除、git 强推/重置、下载执行、未知链接（含 `web_fetch`）、关机停服、容器/数据库删除、提权等返回 `ask` 让用户确认；不覆盖已有 deny/cancel/ask。
 - [x] 单轮 bash 调用门禁：第 21 次起 `ask`（同一轮只问一次），第 40 次起 `deny`；`turn/start` 重置，缺事件时按 session 退化计数并 warning；
+- [x] 软上限自动继续：单轮 bash 达到 `maxCallsPerTurn`（默认 20）即暂停本轮，deny reason 带 `context-guard:hard-limit-draft`；Web 客户端在输入框为空时写入 `继续`（无换行、不自动发送）；`hardMaxCallsPerTurn`（默认 40）仅兜底；同 session 最多 3 次、同 turn 最多 1 次；Desktop/TUI 静默降级；
+- [x] 修复 Web 自动继续不生效：组件内改为访问插件级 `pluginCtx`；同时兼容真实拒绝事件形状（`data.message.content[].text` + `isError`）与 `data.error.reason`；打开会话时对最近 30 分钟事件补写；新增 VM 集成测试；
 - [x] 临时目录 `rm` 豁免：目标全部位于 `/tmp`、`/var/tmp`、`$TMPDIR`/`${TMPDIR}` 时跳过 `destructive-rm`；临时目录本身、`..`/通配符、`sudo`/`xargs`/命令替换仍拦截；门禁文案同时显示 bash 调用次数与 session step；
+- [x] 风险误报收敛：`sudo -n true`（及 `sudo -n -v`）与 `sudo -n` 只读检查命令（如 `ls`、`systemctl status`）不再触发 `privilege-escalation`；`rm` 目标全部位于 `test`/`tests`/`__tests__`/`test-*` 等测试目录时与临时目录一样跳过 `destructive-rm`；`touch <write-test 文件> && rm <同一文件>`、`f=$(mktemp /tmp/...) && rm -f "$f"` 自清理写权限探测同样放行；
 - [x] 单轮累计输出门禁：本轮 emitted 超过 40000 字符后，后续 >800 字符结果完整落盘，上下文只回 ≤800 字符摘要 + 路径；
 - [x] 命令形态拦截：整文件 `cat`、无排除的 `~/.dsh`/家目录递归搜索、裸 `curl` API 默认返回 `deny` 并给 `read`/`grep`/`jq` 等替代；可配 `commandLintMode: ask`；同时注册系统提示引导；`ask` 模式下与风险规则合并为一次 `ask`；
 - [x] 文档提交门禁：`tools/pre-execute` 解析 `git commit` 目标仓，存在 `docs-policy.json` 时运行 `scripts/check.sh --repo`，失败 `deny`；配置 `docGuardEnabled`/`docGuardWorkspaceRoot`/`docGuardTimeoutMs`；不自动 `--tag`；
@@ -65,3 +68,7 @@
 | 2026-11-17 | `node test.mjs`（文档门禁） | ok；fixture 超限/缺 frontmatter 的 `git -C <repo> commit` 被 deny，修复后放行；非 commit 不触发 |
 | 2026-11-17 | `scripts/docs-watch.sh --once` | ok；`--tag` 后终检通过，报告写入 `personalCloud/.run/docs-watch/latest.md`；通知因沙箱 `~/.config` EROFS 改用 `.run/docs-watch.env` 测试成功 |
 | 2026-11-17 | 临时 fixture `check.sh --repo --tag` | 超限 FAIL、legacy WARN、`implementation_status: blocked` 不被 `--tag` 改写 |
+| 2026-11-17 | `node test.mjs`（硬上限自动继续） | ok；覆盖标记、同 turn 去重、同 session 3 次上限与 Web client 语法；待宿主机 Web 实机验收 |
+| 2026-11-18 | 真实会话 `session-4766b047...` 拒绝事件 + VM 集成测试 | 修复前脚本复现 `ctx is not defined` 且事件形状不匹配；修复后挂载即写入 `["继续"]`；`npm test` ok |
+| 2026-11-18 | 提醒/硬上限调整 | 单轮每 20 次 bash 返回一次 `ask`（黄色 pending 点）；第 80 次 deny + marker 并自动填「继续」；`maxCallsPerTurn=20`/`hardMaxCallsPerTurn=80` 显式写入 profile 模板与 `apply-profile.sh`；`npm test` ok |
+| 2026-11-18 | `npm test`（风险误报收敛） | ok；新增 `sudo -n true`/`-v` 与 `sudo -n` 只读命令、write-test 与 mktemp 自清理探测放行、test 目录 `rm` 豁免与危险边界断言 |

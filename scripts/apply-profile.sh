@@ -42,7 +42,7 @@ for profile_name in "${PROFILE_NAMES[@]}"; do
 
   cp -a "$profile" "$profile.bak.context-guard-$STAMP"
   python3 - "$profile" "$PRESET_FILE" <<'PY'
-import pathlib, sys
+import pathlib, re, sys
 
 p = pathlib.Path(sys.argv[1])
 preset = pathlib.Path(sys.argv[2]) if len(sys.argv) > 2 and sys.argv[2] else None
@@ -81,8 +81,19 @@ if '- id: context-guard' not in text:
 - insert:
     - id: context-guard
       name: '@fenghoer/dsh-context-guard'
+      config:
+        maxCallsPerTurn: 20
+        hardMaxCallsPerTurn: 80
 """
     changed = True
+
+# 1b) 旧 context-guard 插入项补上显式阈值配置；已有配置不覆盖。
+text = re.sub(
+    r"(- id: context-guard\n      name: '@fenghoer/dsh-context-guard')\n(?=\n|$)",
+    r"\1\n      config:\n        maxCallsPerTurn: 20\n        hardMaxCallsPerTurn: 80\n",
+    text,
+)
+changed = True if 'hardMaxCallsPerTurn: 80' in text else changed
 
 # 2) persistent-bash 不在 profile 顶层，旧写法会报 patch: entry not found。
 #    删除旧块，改为覆盖 minimal preset 的完整 plugins 列表。

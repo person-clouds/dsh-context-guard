@@ -19,10 +19,12 @@ import { cleanupOutputs } from './lib/cleanup.js'
 import { analyzeCommand, riskAskDecision } from './lib/risk.js'
 import { lintCommand, lintDecision } from './lib/command-lint.js'
 import { TurnBudget } from './lib/turn-budget.js'
+import { HARD_LIMIT_DRAFT_MARKER } from './lib/continue-draft.js'
 
 const execFileAsync = promisify(execFile)
 
 export const name = 'dsh-context-guard'
+export { HARD_LIMIT_DRAFT_MARKER } from './lib/continue-draft.js'
 
 const DEFAULT_TOOL_NAMES = ['bash', 'persistent-bash', 'terminal-bash']
 
@@ -226,7 +228,7 @@ function guardConfig(config) {
     commandLintMode: config.commandLintMode === 'ask' ? 'ask' : 'deny',
     commandGuidanceEnabled: config.commandGuidanceEnabled !== false,
     maxCallsPerTurn: Number(config.maxCallsPerTurn) || 20,
-    hardMaxCallsPerTurn: Number(config.hardMaxCallsPerTurn) || 40,
+    hardMaxCallsPerTurn: Number(config.hardMaxCallsPerTurn) || 80,
     maxTurnOutputChars: Number(config.maxTurnOutputChars) || 40000,
     exhaustedOutputChars: Number(config.exhaustedOutputChars) || 800,
     outputDir: typeof config.outputDir === 'string' && config.outputDir ? config.outputDir : join(dshHome(), 'tool-output'),
@@ -291,10 +293,10 @@ function callLimitAskDecision(check) {
   const step = stepLabel(check.step, 'zh')
   return {
     kind: 'ask',
-    reason: `context-guard call-limit: 本轮 bash 调用 ${check.maxCallsPerTurn} 次（session step ${step}），是否继续（本轮第 ${check.count} 次 bash 调用）`,
+    reason: `context-guard call-limit: 本轮 bash 调用达到 ${check.count} 次提醒点（每 ${check.maxCallsPerTurn} 次提醒一次），是否继续？`,
     displayReason: {
-      en: `This turn has already used ${check.maxCallsPerTurn} bash calls (session step ${stepLabel(check.step, 'en')}). Continue with bash call ${check.count} of at most ${check.hardMaxCallsPerTurn}? Bash calls and session step are different counters.`,
-      zh: `本轮 bash 调用 ${check.maxCallsPerTurn} 次（session step ${step}），是否继续？
+      en: `This turn has reached ${check.count} bash calls (a reminder every ${check.maxCallsPerTurn} calls). Continue? The hard deny is at ${check.hardMaxCallsPerTurn} calls. Bash calls and session step are different counters.`,
+      zh: `本轮 bash 调用达到 ${check.count} 次提醒点（每 ${check.maxCallsPerTurn} 次提醒一次），是否继续？
 当前是本轮第 ${check.count} 次 bash 调用；第 ${check.hardMaxCallsPerTurn} 次起会拒绝执行。注意：bash 调用次数与 session step 不是同一口径。建议合并命令、改用 inspect.sh，或先汇报进展。`,
     },
   }
@@ -303,7 +305,7 @@ function callLimitAskDecision(check) {
 function callLimitDenyDecision(check) {
   return {
     kind: 'deny',
-    reason: `context-guard call-limit: 本轮 bash 调用 ${check.count} 次（session step ${stepLabel(check.step, 'zh')}），达到 ${check.hardMaxCallsPerTurn} 次硬上限；请拆任务或先汇报进展。`,
+    reason: `context-guard call-limit: 本轮 bash 调用 ${check.count} 次（session step ${stepLabel(check.step, 'zh')}），达到 ${check.hardMaxCallsPerTurn} 次硬上限；请拆任务或先汇报进展。 ${HARD_LIMIT_DRAFT_MARKER}`,
   }
 }
 

@@ -1,13 +1,15 @@
 {
   "name": "@fenghoer/dsh-context-guard",
-  "version": "0.3.1",
+  "version": "0.4.1",
   "type": "module",
   "description": "DSH 插件：工具输出预算与落盘、重复结果去重、风险命令确认、只读诊断脚本、压缩归档与指标统计。",
   "exports": {
-    ".": "./index.js"
+    ".": "./index.js",
+    "./client": "./client.js"
   },
   "files": [
     "index.js",
+    "client.js",
     "lib",
     "scripts",
     "cordis.patch.yml",
@@ -22,6 +24,13 @@
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "inject": [
+        "@deepseek-ai/dsh-api-session-controller",
+        "@deepseek-ai/dsh-client-ui-conversation"
+      ],
+      "platform": "web"
     }
   },
   "repository": {

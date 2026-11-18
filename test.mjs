@@ -3,6 +3,7 @@ import { spawnSync } from 'node:child_process'
 import { chmod, copyFile, mkdir, mkdtemp, readFile, readdir, utimes, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import vm from 'node:vm'
 import { name, apply, docGuardDecision, parseGitCommitCommand } from './index.js'
 import { budgetFor, classifyCommand, renderBounded } from './lib/budget.js'
 import { lintCommand, lintDecision } from './lib/command-lint.js'
@@ -10,6 +11,7 @@ import { TurnBudget } from './lib/turn-budget.js'
 import { DedupCache } from './lib/dedup.js'
 import { cleanupOutputs } from './lib/cleanup.js'
 import { analyzeCommand } from './lib/risk.js'
+import { ContinueDraftBudget, HARD_LIMIT_DRAFT_MARKER, hardLimitResultOf } from './lib/continue-draft.js'
 
 // 命令分类与预算
 assert.equal(classifyCommand('cat /var/log/syslog'), 'unbounded')
@@ -41,16 +43,24 @@ assert.ok(bounded.endsWith('F'))
 
 // 单轮调用与累计输出门禁
 const turnWarnings = []
-const turnBudget = new TurnBudget({ maxCallsPerTurn: 20, hardMaxCallsPerTurn: 40, maxTurnOutputChars: 100, logger: { warn(...args) { turnWarnings.push(args) } } })
+const turnBudget = new TurnBudget({ maxCallsPerTurn: 20, hardMaxCallsPerTurn: 80, maxTurnOutputChars: 100, logger: { warn(...args) { turnWarnings.push(args) } } })
 turnBudget.startTurn('turn-test', 1)
 turnBudget.noteStep('turn-test', 7)
-for (let index = 1; index <= 20; index++) assert.equal(turnBudget.checkCall('turn-test').action, 'allow')
-const askCall = turnBudget.checkCall('turn-test')
-assert.equal(askCall.action, 'ask')
-assert.equal(askCall.step, 7)
-assert.equal(turnBudget.checkCall('turn-test').action, 'allow')
-for (let index = 23; index < 40; index++) assert.equal(turnBudget.checkCall('turn-test').action, 'allow')
-assert.equal(turnBudget.checkCall('turn-test').action, 'deny')
+for (let index = 1; index <= 19; index++) assert.equal(turnBudget.checkCall('turn-test').action, 'allow')
+const unitAsk20 = turnBudget.checkCall('turn-test')
+assert.equal(unitAsk20.action, 'ask')
+assert.equal(unitAsk20.count, 20)
+assert.equal(unitAsk20.step, 7)
+for (let index = 21; index <= 39; index++) assert.equal(turnBudget.checkCall('turn-test').action, 'allow')
+const unitAsk40 = turnBudget.checkCall('turn-test')
+assert.equal(unitAsk40.action, 'ask')
+assert.equal(unitAsk40.count, 40)
+for (let index = 41; index <= 59; index++) assert.equal(turnBudget.checkCall('turn-test').action, 'allow')
+assert.equal(turnBudget.checkCall('turn-test').action, 'ask')
+for (let index = 61; index <= 79; index++) assert.equal(turnBudget.checkCall('turn-test').action, 'allow')
+const unitDeny80 = turnBudget.checkCall('turn-test')
+assert.equal(unitDeny80.action, 'deny')
+assert.equal(unitDeny80.count, 80)
 assert.equal(turnBudget.consumeOutput('turn-test', 101).exhausted, true)
 assert.equal(turnBudget.isExhausted('turn-test'), true)
 turnBudget.startTurn('turn-test', 2)
@@ -58,7 +68,7 @@ assert.equal(turnBudget.checkCall('turn-test').action, 'allow')
 assert.equal(turnBudget.isExhausted('turn-test'), false)
 const fallbackBudget = new TurnBudget({ logger: { warn(...args) { turnWarnings.push(args) } } })
 assert.equal(fallbackBudget.maxCallsPerTurn, 20)
-assert.equal(fallbackBudget.hardMaxCallsPerTurn, 40)
+assert.equal(fallbackBudget.hardMaxCallsPerTurn, 80)
 assert.equal(fallbackBudget.maxTurnOutputChars, 40000)
 assert.equal(fallbackBudget.exhaustedOutputChars, 800)
 assert.equal(fallbackBudget.checkCall('fallback-session').action, 'allow')
@@ -152,6 +162,37 @@ assert.equal(analyzeCommand('rm -rf /tmp/*').risk, true)
 assert.equal(analyzeCommand('rm -rf /tmp/../home/zh/foo').risk, true)
 assert.equal(analyzeCommand('rm -rf /tmp/foo /home/zh/foo').risk, true)
 assert.equal(analyzeCommand('sudo rm -rf /tmp/foo').risk, true)
+// sudo 探测命令与 test 目录 rm 不应误报
+assert.equal(analyzeCommand('sudo -n true').risk, false)
+assert.equal(analyzeCommand('sudo -n -- true').risk, false)
+assert.equal(analyzeCommand('sudo -n -v').risk, false)
+assert.equal(analyzeCommand('sudo -n true && echo ok').risk, false)
+assert.equal(analyzeCommand('sudo -n env').risk, true)
+assert.ok(analyzeCommand('sudo -n true && sudo -n env').reasons.some(reason => reason.code === 'privilege-escalation'))
+assert.equal(analyzeCommand('rm -rf ./test').risk, false)
+assert.equal(analyzeCommand('rm -rf test').risk, false)
+assert.equal(analyzeCommand('rm -rf /home/zh/project/tests').risk, false)
+assert.equal(analyzeCommand('rm -rf ./test-output').risk, false)
+assert.equal(analyzeCommand('rm -rf ./latest').risk, true)
+assert.equal(analyzeCommand('rm -rf ./test/../important').risk, true)
+assert.equal(analyzeCommand('rm -rf ./test/*').risk, true)
+assert.equal(analyzeCommand('touch /mnt/14t/.dsh-write-test && rm /mnt/14t/.dsh-write-test').risk, false)
+assert.equal(analyzeCommand('touch /mnt/14t/.dsh-write-test-123; rm -f /mnt/14t/.dsh-write-test-123').risk, false)
+assert.equal(analyzeCommand('touch /mnt/14t/.dsh-write-test-123 && rm /mnt/14t/other-file').risk, true)
+assert.equal(analyzeCommand('rm /mnt/14t/.dsh-write-test-123').risk, true)
+assert.equal(analyzeCommand('touch /etc/passwd && rm /etc/passwd').risk, true)
+assert.equal(analyzeCommand('f=$(mktemp /tmp/.probe.XXXXXX 2>&1) && { echo "tmp actual write OK: $f"; rm -f "$f"').risk, false)
+assert.equal(analyzeCommand('f=$(mktemp /tmp/.probe.XXXXXX) && rm -f "${f}"').risk, false)
+assert.equal(analyzeCommand('f=$(mktemp /tmp/.probe.XXXXXX); rm -rf "$f"; rm -rf /home/zh/other').risk, true)
+assert.equal(analyzeCommand('f=$(mktemp /home/zh/probe.XXXXXX) && rm -f "$f"').risk, true)
+assert.equal(analyzeCommand('f=$(mktemp /tmp/.probe.XXXXXX) && rm -f "$(dirname "$f")"').risk, true)
+assert.equal(analyzeCommand('rm -f "$f"').risk, true)
+assert.equal(analyzeCommand('sudo -n ls /etc/cron.d 2>&1').risk, false)
+assert.equal(analyzeCommand('sudo -n -- ls /etc/cron.d').risk, false)
+assert.equal(analyzeCommand('sudo -n systemctl status nginx').risk, false)
+assert.equal(analyzeCommand('sudo -n systemctl restart nginx').risk, true)
+assert.equal(analyzeCommand('sudo -n rm -rf /tmp/foo').risk, true)
+assert.equal(analyzeCommand('sudo ls /etc/cron.d').risk, true)
 assert.equal(analyzeCommand('xargs rm -rf /tmp/foo').risk, true)
 assert.equal(analyzeCommand('rm -rf /tmp/foo $(date)').risk, true)
 assert.ok(analyzeCommand('sudo systemctl stop nginx').reasons.some(reason => reason.code === 'system-power'))
@@ -208,27 +249,49 @@ assert.match(mergedAsked.reason, /whole-file-cat/)
 assert.match(mergedAsked.displayReason.zh, /风险命令需要确认/)
 assert.match(mergedAsked.displayReason.zh, /替代/)
 
-// 第 21 次 bash 返回一次 ask，第 40 次 deny
+// 每 20 次 bash 提醒一次；第 80 次返回带标记的 deny（自动填「继续」）；新 turn 清零
 const gateExec = { ...safeExec, agent: { id: 'session-gate' } }
 await handlers.get('session/event')[0]({ id: 'session-gate' }, { type: 'turn/start', data: { turn: 1 } })
 await handlers.get('session/event')[0]({ id: 'session-gate' }, { type: 'step/start', data: { step: 7 } })
-for (let index = 1; index <= 20; index++) {
+for (let index = 1; index <= 19; index++) {
   assert.equal((await preExecute(gateExec, async () => ({ kind: 'allow' }))).kind, 'allow')
 }
-const ask21 = await preExecute(gateExec, async () => ({ kind: 'allow' }))
-assert.equal(ask21.kind, 'ask')
-assert.match(ask21.reason, /本轮 bash 调用 20 次（session step 7）/)
-assert.match(ask21.displayReason.zh, /本轮 bash 调用 20 次（session step 7）/)
-assert.match(ask21.displayReason.zh, /不是同一口径/)
-assert.match(ask21.displayReason.zh, /是否继续/)
+const ask20 = await preExecute(gateExec, async () => ({ kind: 'allow' }))
+assert.equal(ask20.kind, 'ask')
+assert.match(ask20.reason, /提醒点/)
+assert.match(ask20.reason, /每 20 次/)
+for (let index = 21; index <= 39; index++) {
+  assert.equal((await preExecute(gateExec, async () => ({ kind: 'allow' }))).kind, 'allow')
+}
+const ask40 = await preExecute(gateExec, async () => ({ kind: 'allow' }))
+assert.equal(ask40.kind, 'ask')
+assert.match(ask40.reason, /提醒点/)
+for (let index = 41; index <= 59; index++) {
+  assert.equal((await preExecute(gateExec, async () => ({ kind: 'allow' }))).kind, 'allow')
+}
+assert.equal((await preExecute(gateExec, async () => ({ kind: 'allow' }))).kind, 'ask')
+for (let index = 61; index <= 79; index++) {
+  assert.equal((await preExecute(gateExec, async () => ({ kind: 'allow' }))).kind, 'allow')
+}
+const deny80 = await preExecute(gateExec, async () => ({ kind: 'allow' }))
+assert.equal(deny80.kind, 'deny')
+assert.match(deny80.reason, /硬上限/)
+assert.match(deny80.reason, /session step 7/)
+assert.ok(deny80.reason.includes(HARD_LIMIT_DRAFT_MARKER))
+await handlers.get('session/event')[0]({ id: 'session-gate' }, { type: 'turn/start', data: { turn: 2 } })
 assert.equal((await preExecute(gateExec, async () => ({ kind: 'allow' }))).kind, 'allow')
-for (let index = 23; index < 40; index++) {
-  assert.equal((await preExecute(gateExec, async () => ({ kind: 'allow' }))).kind, 'allow')
-}
-const deny40 = await preExecute(gateExec, async () => ({ kind: 'allow' }))
-assert.equal(deny40.kind, 'deny')
-assert.match(deny40.reason, /硬上限/)
-assert.match(deny40.reason, /session step 7/)
+
+// 自动「继续」：同 session 最多 3 次、同 turn 最多 1 次；只识别带标记的 tool/result
+const continueBudget = new ContinueDraftBudget(3)
+assert.equal(continueBudget.claim('s', 1), true)
+assert.equal(continueBudget.claim('s', 1), false)
+assert.equal(continueBudget.claim('s', 2), true)
+assert.equal(continueBudget.claim('s', 3), true)
+assert.equal(continueBudget.claim('s', 4), false)
+assert.equal(continueBudget.count('s'), 3)
+assert.deepEqual(hardLimitResultOf({ type: 'event', event: { type: 'tool/result', seq: 9, data: { turn: 2, error: { reason: `x ${HARD_LIMIT_DRAFT_MARKER}` } } } }), { turn: 2, seq: 9 })
+assert.deepEqual(hardLimitResultOf({ type: 'event', event: { type: 'tool/result', seq: 10, data: { turn: 3, message: { content: [{ type: 'text', text: `Error: context-guard call-limit ... ${HARD_LIMIT_DRAFT_MARKER}` }], isError: true } } } }), { turn: 3, seq: 10 })
+assert.equal(hardLimitResultOf({ type: 'event', event: { type: 'tool/result', data: { turn: 2, error: { reason: 'normal' } } } }), undefined)
 
 // 压缩归档
 const session = {
@@ -352,6 +415,7 @@ const help = spawnSync('bash', [inspect, '--help'], { encoding: 'utf8' })
 assert.equal(help.status, 0)
 assert.match(help.stdout, /overview/)
 assert.match(help.stdout, /report/)
+assert.equal(spawnSync(process.execPath, ['--check', new URL('./client.js', import.meta.url).pathname]).status, 0)
 
 // linuxops 可选兼容层：语法、安装、版本与 inspect.sh 联调
 const shim = new URL('./scripts/linuxops-shim.sh', import.meta.url).pathname
@@ -410,5 +474,49 @@ assert.match(blocked.reason, /文档检查未通过/)
 await writeFile(join(guardRepo, 'doc/bad.md'), '---\naudience: ai\nstatus: current\n---\n\n# 已修复\n')
 const docAllowed = await docGuardDecision(`git -C ${guardRepo} commit -m test`, docGuardCfg)
 assert.equal(docAllowed, null)
+
+// Web 客户端：真实 tool/result 形状（message.content + isError）应写入「继续」，同 turn 只写一次
+{
+  const clientSource = await readFile(new URL('./client.js', import.meta.url), 'utf8')
+  const entry = {
+    type: 'event',
+    event: {
+      type: 'tool/result',
+      seq: 210,
+      time: Date.now(),
+      data: {
+        turn: 1,
+        message: {
+          content: [{ type: 'text', text: `Error: context-guard call-limit ... ${HARD_LIMIT_DRAFT_MARKER}` }],
+          isError: true,
+        },
+      },
+    },
+  }
+  let plugin
+  let registered
+  let listener
+  const writes = []
+  const eventSource = {
+    subscribe(fn) { listener = fn; return () => { listener = undefined } },
+    getSnapshot() { return { entries: [entry], change: { kind: 'append', entries: [entry] } } },
+  }
+  const ctx = {
+    sessions: { binding: () => ({ eventSource }) },
+    slots: { inject(_name, fn) { registered = fn() }, register(_opts, Component) { return { Component } } },
+  }
+  const React = { useRef: (value) => ({ current: value }), useEffect: (fn) => { fn() } }
+  const win = { __ModuleLoader__: { load(m) { plugin = m.factory((id) => id === 'react' ? React : undefined) } } }
+  vm.runInNewContext(clientSource, { window: win, console })
+  plugin.apply(ctx)
+  registered.Component({
+    sessionId: 'session-test',
+    useInput: () => '',
+    inputActions: { setDraft: (text) => writes.push(text) },
+  })
+  listener()
+  listener()
+  assert.deepEqual(writes, ['继续'])
+}
 
 console.log('ok')

@@ -10,7 +10,7 @@ The plugin provides seven safeguards:
 
 1. **Bounded summaries** — when output exceeds its budget, the full text is written to disk and the context receives only head/tail, command type and the archive path.
 2. **Deduplication** — identical results for the same session + tool + args within 10 minutes return a pointer to the previous call; changed results return a line-level diff.
-3. **Per-turn call gate** — the 21st bash call in a turn returns one `ask`; the 40th and later calls are denied.
+3. **Per-turn call gate** — every 20 bash calls in a turn returns an `ask` reminder (20/40/60), shown as a yellow pending dot in the session list; the 80th and later calls are denied, and the Web client fills "继续" at that hard limit.
 4. **Per-turn output gate** — after more than 40 KB has entered the context in one turn, later results over 800 characters are reduced to a summary plus archive path.
 5. **Command-shape enforcement** — whole-file `cat`, unscoped recursive searches under the home directory, and bare `curl` API calls are denied by default with bounded alternatives (`read`/`grep`/`jq`); `ask` mode is configurable; system-prompt guidance is injected too.
 6. **Read-only diagnostics** — `scripts/inspect.sh` replaces ad-hoc commands with fixed, bounded patterns.
@@ -77,6 +77,9 @@ Unbounded commands (`cat`, `journalctl` without `--since`/`-n`, `find /`, `du /`
 - Complex shell workflows can set `commandLintMode: ask` to downgrade to confirmation; `commandGuidanceEnabled: true` also registers system-prompt guidance for `read`/`grep`/`jq`.
 - In `ask` mode a command-lint match and a risk match are merged into one `ask`; a lint `deny` or an existing `deny`/`cancel` wins.
 
+## Reminders every 20 calls and auto-fill "continue" at the hard limit
+
+Every `maxCallsPerTurn` bash calls (default 20) the turn returns one `ask` approval reminder. The pending interaction shows a yellow dot next to the session name; opening the session shows the approval panel where you can allow once or cancel. At `hardMaxCallsPerTurn` (default 80) the turn returns a deny result carrying the machine marker `context-guard:hard-limit-draft`. The Web client fills an **empty** composer with `继续`; it never sends automatically — press Enter to continue. At most 3 auto-fills per session and 1 per turn. Web only exposes a composer while the session is open; opening a session also restores the fill when the event occurred within the last 30 minutes. Restart DSH Web and reload the page after updating the plugin. Desktop/TUI do not load the Web client and silently fall back to the original deny message.
 ## Risky-command warnings
 
 `tools/pre-execute` runs after DSH's own permission policy as a final safety net. On a match it returns `ask`, so DSH's approval UI asks the user; the command does not run without confirmation. It does not rewrite commands, sandbox execution, or replace DSH permissions. It checks `bash` / `persistent-bash` / `terminal-bash` and `web_fetch` by default.
@@ -93,7 +96,7 @@ Default coverage:
 | Databases | `DROP DATABASE/TABLE`, `TRUNCATE TABLE`, `DELETE FROM` without `WHERE` |
 | Privilege/history | `sudo`, `doas`, `su -`, `history -c` |
 
-`rm` is exempt from `destructive-rm` only when every target is under `/tmp`, `/var/tmp`, `$TMPDIR` or `${TMPDIR}`. Targets equal to the temp root, or containing `..`, `*`, `?`, `[`, plus `sudo`, `xargs`, command substitution and backticks are not exempt. `repo-delete`, `find-delete` and other rules are unchanged.
+`rm` is exempt from `destructive-rm` only when every target is under `/tmp`, `/var/tmp`, `$TMPDIR`/`${TMPDIR}`, or entirely inside test directories (`test`, `tests`, `__tests__`, `test-*`, `*-test`, `*.test`, `*.spec`). Targets equal to the temp root, or containing `..`, `*`, `?`, `[`, plus `sudo`, `xargs`, command substitution and backticks are not exempt. `repo-delete`, `find-delete` and other rules are unchanged. Side-effect-free probes such as `sudo -n true` (and `sudo -n -v`), plus `sudo -n` with read-only inspection commands such as `ls`, `stat`, `cat`, `grep` and `systemctl status`, do not trigger `privilege-escalation`; other `sudo` commands still do. Self-cleaning write probes such as `touch <write-test file> && rm <same file>` or `f=$(mktemp /tmp/...) && rm -f "$f"` do not trigger `destructive-rm` either.
 
 Default host allowlist: `localhost`, `127.0.0.1`, `[::1]`, `github.com`, `gitee.com`, `raw.githubusercontent.com`; override with `riskAllowHosts`. Rules are regex heuristics and can both over- and under-report; high-risk production operations still need human review.
 
@@ -208,8 +211,8 @@ Notes:
         headChars: 1200
         tailChars: 800
         hardMaxChars: 6000
-        maxCallsPerTurn: 20
-        hardMaxCallsPerTurn: 40
+        maxCallsPerTurn: 20              # approval reminder every 20 calls
+        hardMaxCallsPerTurn: 80          # hard deny + auto-fill "continue"
         maxTurnOutputChars: 40000
         exhaustedOutputChars: 800
         commandLintEnabled: true
