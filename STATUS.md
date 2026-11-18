@@ -27,7 +27,7 @@
 - [x] 风险误报收敛：`sudo -n true`（及 `sudo -n -v`）与 `sudo -n` 只读检查命令（如 `ls`、`systemctl status`）不再触发 `privilege-escalation`；`rm` 目标全部位于 `test`/`tests`/`__tests__`/`test-*` 等测试目录时与临时目录一样跳过 `destructive-rm`；`touch <write-test 文件> && rm <同一文件>`、`f=$(mktemp /tmp/...) && rm -f "$f"` 自清理写权限探测同样放行；
 - [x] 单轮累计输出门禁：本轮 emitted 超过 40000 字符后，后续 >800 字符结果完整落盘，上下文只回 ≤800 字符摘要 + 路径；
 - [x] 命令形态拦截：整文件 `cat`、无排除的 `~/.dsh`/家目录递归搜索、裸 `curl` API 默认返回 `deny` 并给 `read`/`grep`/`jq` 等替代；可配 `commandLintMode: ask`；同时注册系统提示引导；`ask` 模式下与风险规则合并为一次 `ask`；
-- [x] 文档提交门禁：`tools/pre-execute` 解析 `git commit` 目标仓，存在 `docs-policy.json` 时运行 `scripts/check.sh --repo`，失败 `deny`；配置 `docGuardEnabled`/`docGuardWorkspaceRoot`/`docGuardTimeoutMs`；不自动 `--tag`；
+- [x] 文档提交门禁：`tools/pre-execute` 解析 `git commit` 目标仓，已登记仓库按中央策略运行 `scripts/check.sh --repo`，失败 `deny`；配置 `docGuardEnabled`/`docGuardWorkspaceRoot`/`docGuardTimeoutMs`；不自动改文件；
 - [x] `scripts/apply-profile.sh` 修复：检查 profile 已安装 scoped 包和失效的 `dsh-superagent` link；修正包名；删除顶层 `persistent-bash` 旧块，改为覆盖 minimal preset 的 `config.plugins` 并设 `maxOutputChars=65536`；`tool-result-pruner=6000/3000/1500`；重复执行幂等。
 - [x] 中文 README 优先展示，补充英文 `README.en.md`；
 - [x] linuxops 可选安装方案：不安装自动回退、插件只读兼容层、通过 `--binary` 接入自建/上游二进制；安装脚本不 sudo、不自动改 PATH；
@@ -66,8 +66,8 @@
 | 2026-11-17 | `dsh --profile web --dump-config` | 失败：沙箱写 `~/.dsh/profiles/web/cordis.yml` EROFS；待宿主机重启后验证 |
 | 2026-11-17 | `node test.mjs` | ok；新增临时目录 rm 豁免边界、session step 记录与门禁文案断言 |
 | 2026-11-17 | `node test.mjs`（文档门禁） | ok；fixture 超限/缺 frontmatter 的 `git -C <repo> commit` 被 deny，修复后放行；非 commit 不触发 |
-| 2026-11-17 | `scripts/docs-watch.sh --once` | ok；`--tag` 后终检通过，报告写入 `personalCloud/.run/docs-watch/latest.md`；通知因沙箱 `~/.config` EROFS 改用 `.run/docs-watch.env` 测试成功 |
-| 2026-11-17 | 临时 fixture `check.sh --repo --tag` | 超限 FAIL、legacy WARN、`implementation_status: blocked` 不被 `--tag` 改写 |
+| 2026-11-17 | `scripts/docs-watch.sh --once` | ok；只读巡检通过，报告写入 `personalCloud/.run/docs-watch/latest.md`；通知因沙箱 `~/.config` EROFS 改用 `.run/docs-watch.env` 测试成功 |
+| 2026-11-17 | 临时 fixture `check.sh --repo` | 断链/非法 PLAN 状态 FAIL，行数超限默认 WARN |
 | 2026-11-17 | `node test.mjs`（硬上限自动继续） | ok；覆盖标记、同 turn 去重、同 session 3 次上限与 Web client 语法；待宿主机 Web 实机验收 |
 | 2026-11-18 | 真实会话 `session-4766b047...` 拒绝事件 + VM 集成测试 | 修复前脚本复现 `ctx is not defined` 且事件形状不匹配；修复后挂载即写入 `["继续"]`；`npm test` ok |
 | 2026-11-18 | 提醒/硬上限调整 | 单轮每 20 次 bash 返回一次 `ask`（黄色 pending 点）；第 80 次 deny + marker 并自动填「继续」；`maxCallsPerTurn=20`/`hardMaxCallsPerTurn=80` 显式写入 profile 模板与 `apply-profile.sh`；`npm test` ok |

@@ -474,29 +474,22 @@ assert.equal(parseGitCommitCommand('git log --grep commit'), null)
 const guardRoot = await mkdtemp(join(tmpdir(), 'dsh-doc-guard-'))
 const guardRepo = join(guardRoot, 'repo')
 await mkdir(join(guardRoot, 'scripts'), { recursive: true })
-await mkdir(join(guardRepo, 'doc'), { recursive: true })
+await mkdir(join(guardRepo, 'doc/specs'), { recursive: true })
 // 文档门禁用工作区根的 check.sh/check_docs.py；本仓已独立，不再假设 personalCloud 相对层级
 const workspaceRoot = process.env.DSH_WORKSPACE_ROOT || '/home/zh/www'
 await copyFile(join(workspaceRoot, 'scripts/check.sh'), join(guardRoot, 'scripts/check.sh'))
 await copyFile(join(workspaceRoot, 'scripts/check_docs.py'), join(guardRoot, 'scripts/check_docs.py'))
+await copyFile(join(workspaceRoot, 'scripts/docs-policy.json'), join(guardRoot, 'scripts/docs-policy.json'))
 await chmod(join(guardRoot, 'scripts/check.sh'), 0o755)
 await writeFile(join(guardRoot, 'repos.yaml'), `version: 1\nrepos:\n  - id: fixture\n    path: ${guardRepo}\n`)
-await writeFile(join(guardRepo, 'docs-policy.json'), JSON.stringify({
-  version: 1,
-  include: ['doc/**'],
-  defaults: { audience: 'ai', status: 'current' },
-  rules: [],
-  line_limits: { ai: 8 },
-  legacy_over_limit: [],
-}, null, 2))
 spawnSync('git', ['init', '-q', guardRepo])
-await writeFile(join(guardRepo, 'doc/bad.md'), '# 坏文档\n' + Array.from({ length: 12 }, (_, index) => `第 ${index} 行`).join('\n') + '\n')
+await writeFile(join(guardRepo, 'doc/specs/bad.md'), '# 坏文档\n\n[断链](missing.md)\n')
 spawnSync('git', ['-C', guardRepo, 'add', '.'])
 const docGuardCfg = { docGuardEnabled: true, docGuardWorkspaceRoot: guardRoot, docGuardTimeoutMs: 30000 }
 const blocked = await docGuardDecision(`git -C ${guardRepo} commit -m test`, docGuardCfg)
 assert.equal(blocked?.kind, 'deny')
-assert.match(blocked.reason, /文档检查未通过/)
-await writeFile(join(guardRepo, 'doc/bad.md'), '---\naudience: ai\nstatus: current\n---\n\n# 已修复\n')
+assert.match(blocked.reason, /失效链接/)
+await writeFile(join(guardRepo, 'doc/specs/bad.md'), '# 已修复\n')
 const docAllowed = await docGuardDecision(`git -C ${guardRepo} commit -m test`, docGuardCfg)
 assert.equal(docAllowed, null)
 

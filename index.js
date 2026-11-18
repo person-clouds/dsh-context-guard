@@ -7,7 +7,7 @@
  */
 
 import { execFile } from 'node:child_process'
-import { access, mkdir, readFile, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { basename, isAbsolute, join, resolve, sep } from 'node:path'
 import { promisify } from 'node:util'
 import { commandOf, dshHome, hashText, safeName, sessionIdOf, textOf as contentText } from './lib/common.js'
@@ -112,7 +112,7 @@ async function defaultRunDocCheck(repoId, cfg) {
   }
 }
 
-/** 提交前文档门禁：只在目标仓存在 docs-policy.json 时运行 check.sh --repo。 */
+/** 提交前文档门禁：目标仓已登记时按工作区中央策略运行 check.sh --repo。 */
 export async function docGuardDecision(command, cfg, logger, deps = {}) {
   if (!cfg?.docGuardEnabled) return null
   const parsed = parseGitCommitCommand(command)
@@ -120,11 +120,6 @@ export async function docGuardDecision(command, cfg, logger, deps = {}) {
   const workspaceRoot = cfg.docGuardWorkspaceRoot
   const repoRoot = await gitTopLevel(deps.cwd || parsed.cwd, cfg.docGuardTimeoutMs)
   if (!repoRoot) return null
-  try {
-    await access(join(repoRoot, 'docs-policy.json'))
-  } catch {
-    return null
-  }
   const repos = await repoIndex(workspaceRoot)
   const normalizedRoot = resolve(repoRoot)
   const matched = repos

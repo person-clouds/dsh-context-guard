@@ -119,7 +119,7 @@ dsh --profile web --dump-config | grep -E "context-guard|maxOutputChars|tool-res
 
 ## 文档提交门禁
 
-`tools/pre-execute` 识别 `git commit`（含 `git -C <dir> commit` 与 `cd <dir> && git commit`），解析目标仓；目标仓存在 `docs-policy.json` 时调用工作区 `scripts/check.sh --repo <repo>`。检查失败返回 `deny`，附失败项，不自动执行 `--tag`，也不猜 `implementation_status`。非提交命令、无 `docs-policy.json` 的仓库不触发。
+`tools/pre-execute` 识别 `git commit`（含 `git -C <dir> commit` 与 `cd <dir> && git commit`），解析目标仓；目标仓已登记时按工作区中央 `scripts/docs-policy.json` 调用 `scripts/check.sh --repo <repo>`。检查失败返回 `deny`，附失败项，不自动改文件。非提交命令、未登记仓库不触发。
 
 配置：`docGuardEnabled`（默认 `true`）、`docGuardWorkspaceRoot`（默认 `/home/zh/www`）、`docGuardTimeoutMs`（默认 `30000`）。修改后重启 DSH profile 生效。
 

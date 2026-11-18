@@ -117,7 +117,7 @@ Default host allowlist: `localhost`, `127.0.0.1`, `[::1]`, `github.com`, `gitee.
 
 ## Documentation commit guard
 
-`tools/pre-execute` recognizes `git commit` (including `git -C <dir> commit` and `cd <dir> && git commit`) and resolves the target repository. If it has `docs-policy.json`, the workspace `scripts/check.sh --repo <repo>` runs; a failure returns `deny` with the failing items. It never runs `--tag` automatically and never guesses `implementation_status`. Non-commit commands and repositories without `docs-policy.json` are not affected.
+`tools/pre-execute` recognizes `git commit` (including `git -C <dir> commit` and `cd <dir> && git commit`) and resolves the target repository. For a registered repository it runs the workspace `scripts/check.sh --repo <repo>` using the central `scripts/docs-policy.json`; a failure returns `deny` with the failing items. It never edits files automatically. Non-commit commands and unregistered repositories are not affected.
 
 Config: `docGuardEnabled` (default `true`), `docGuardWorkspaceRoot` (default `/home/zh/www`), `docGuardTimeoutMs` (default `30000`). Restart the DSH profile after changing them.
 
