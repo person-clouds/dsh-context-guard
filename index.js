@@ -202,7 +202,7 @@ function renderStatus({ session, snapshot, phase, summary, meta }) {
 
 async function writeArchive(session, phase, summary, meta, dir) {
   const snapshot = snapshotOf(session)
-  const root = dir || join(dshHome(), 'compaction-archive')
+  const root = dir || join(dshHome(), 'context-guard', 'archive')
   const sessionDir = join(root, safeName(session.id))
   await mkdir(sessionDir, { recursive: true })
   const status = join(sessionDir, 'STATUS.md')

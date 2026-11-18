@@ -129,7 +129,7 @@ dsh --profile web --dump-config | grep -E "context-guard|maxOutputChars|tool-res
 ${DSH_HOME:-$HOME/.dsh}/tool-output/<session-id>/<timestamp>-<call-id>.log
 ${DSH_HOME:-$HOME/.dsh}/context-guard/metrics/<session-id>.jsonl
 ${DSH_HOME:-$HOME/.dsh}/context-guard/metrics/STATUS.md
-${DSH_HOME:-$HOME/.dsh}/compaction-archive/<session-id>/STATUS.md
+${DSH_HOME:-$HOME/.dsh}/context-guard/archive/<session-id>/STATUS.md
 ```
 
 清理策略：保留 7 天；单会话 50MB / 300 文件；全局 500MB；删除最旧文件；当前会话保留最近 3 个。目录 0700、文件 0600。
