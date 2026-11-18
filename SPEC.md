@@ -32,7 +32,7 @@ status: current
 
 ## 接口
 
-- 插件入口 `index.js`，辅助模块在 `lib/`（`budget`、`dedup`、`metrics`、`risk`、`command-lint`、`archive`、`cleanup`、`turn-budget`、`continue-draft`、`doc-guard`）；
+- 插件入口 `index.js`，辅助模块在 `lib/`（`budget`、`dedup`、`metrics`、`risk`、`command-lint`、`archive`、`cleanup`、`turn-budget`、`continue-draft`）；文档提交门禁在 `index.js`；
 - Client bundle：`client.js`（Web，pending 点与审批浮窗）；
 - 配置键：`thresholdChars`、`headChars`、`tailChars`、`maxCallsPerTurn`、`hardMaxCallsPerTurn`、`maxTurnOutputChars`、`exhaustedOutputChars`、`commandLintMode`、`commandGuidanceEnabled` 等，默认值见 `README.md`；
 - 运维脚本：`scripts/apply-profile.sh`、`scripts/inspect.sh`、`scripts/install-linuxops.sh`。

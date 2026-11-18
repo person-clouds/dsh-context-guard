@@ -10,7 +10,7 @@
 
 ## 范围
 
-- 代码：`task/dsh-context-guard/`
+- 代码：`dsh-context-guard/`
 - 配置：`~/.dsh/profiles/web/cordis.patch.yml`、`~/.dsh/profiles/superagent/cordis.patch.yml`
 - 安装：两个 profile 都 `dsh plugin add link:...`
 - 不改 DSH 核心代码；不自动改写用户命令；不替代 DSH 权限/审批策略。
@@ -60,16 +60,16 @@ commandLintEnabled: true
 6. 更新 `scripts/apply-profile.sh`：统一 scoped 包名；检测 `node_modules/@fenghoer/dsh-context-guard`；缺失时输出安装命令并以非零退出；已有条目只改不重复加。
 7. 宿主机执行：
    ```bash
-   dsh plugin --profile web add link:/home/zh/www/personalCloud/task/dsh-context-guard
-   dsh plugin --profile superagent add link:/home/zh/www/personalCloud/task/dsh-context-guard
-   task/dsh-context-guard/scripts/apply-profile.sh
+   dsh plugin --profile web add link:/home/zh/www/dsh-context-guard
+   dsh plugin --profile superagent add link:/home/zh/www/dsh-context-guard
+   dsh-context-guard/scripts/apply-profile.sh
    ```
    然后重启 web / superagent 的 DSH 进程（由用户执行）。
 8. 跑测试、验证 dump-config、更新文档，提交并报告 commit hash 与回滚命令。
 
 ## 验收
 
-- `cd task/dsh-context-guard && npm test` 通过。
+- `cd dsh-context-guard && npm test` 通过。
 - `dsh --profile web --dump-config` 与 `--profile superagent` 均包含 `@fenghoer/dsh-context-guard`，启动日志无 `ERR_MODULE_NOT_FOUND`。
 - 合成会话验证：第 21 次 bash 出现一次 `ask`；第 40 次为 `deny`；单轮 emitted 超过 40000 后仅回 800 字符 + 落盘路径。
 - 回放 `session-277f61e5...` 的 77 条命令/结果：原始 205,616 chars，预计 emitted ≤ 60,000 chars（当前预算约 153,465，收紧后约 112,862，加单轮累计门禁后进一步下降）。

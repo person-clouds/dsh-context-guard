@@ -7,7 +7,7 @@
 
 ## 范围
 
-- 代码：`/home/zh/www/personalCloud/task/dsh-context-guard/`
+- 代码：`/home/zh/www/dsh-context-guard/`
 - 文件：`lib/risk.js`、`lib/turn-budget.js`、`index.js`、`test.mjs`、`README.md`、`README.en.md`
 - 不加配置项，临时目录白名单硬编码为 `/tmp`、`/var/tmp`、`$TMPDIR` / `${TMPDIR}`。
 

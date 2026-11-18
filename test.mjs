@@ -452,8 +452,10 @@ const guardRoot = await mkdtemp(join(tmpdir(), 'dsh-doc-guard-'))
 const guardRepo = join(guardRoot, 'repo')
 await mkdir(join(guardRoot, 'scripts'), { recursive: true })
 await mkdir(join(guardRepo, 'doc'), { recursive: true })
-await copyFile(new URL('../../workspace/scripts/check.sh', import.meta.url), join(guardRoot, 'scripts/check.sh'))
-await copyFile(new URL('../../workspace/scripts/check_docs.py', import.meta.url), join(guardRoot, 'scripts/check_docs.py'))
+// 文档门禁用工作区根的 check.sh/check_docs.py；本仓已独立，不再假设 personalCloud 相对层级
+const workspaceRoot = process.env.DSH_WORKSPACE_ROOT || '/home/zh/www'
+await copyFile(join(workspaceRoot, 'scripts/check.sh'), join(guardRoot, 'scripts/check.sh'))
+await copyFile(join(workspaceRoot, 'scripts/check_docs.py'), join(guardRoot, 'scripts/check_docs.py'))
 await chmod(join(guardRoot, 'scripts/check.sh'), 0o755)
 await writeFile(join(guardRoot, 'repos.yaml'), `version: 1\nrepos:\n  - id: fixture\n    path: ${guardRepo}\n`)
 await writeFile(join(guardRepo, 'docs-policy.json'), JSON.stringify({

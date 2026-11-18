@@ -2,7 +2,7 @@
 
 - 更新时间：2026-11-18
 - 一句话：DSH 工具输出预算/落盘、去重、单轮调用/输出门禁、硬上限后 Web 自动填入「继续」、命令形态拦截、风险确认、只读诊断、压缩归档与指标。
-- 位置：`task/dsh-context-guard/`；代码与测试已完成，待宿主机安装包并执行 `scripts/apply-profile.sh` 修复 web/superagent profile。
+- 位置：`dsh-context-guard/`；代码与测试已完成，待宿主机安装包并执行 `scripts/apply-profile.sh` 修复 web/superagent profile。
 
 ## 已完成
 
@@ -39,7 +39,7 @@
 | 1 | ~~创建公开 GitHub 仓库 `person-clouds/dsh-context-guard`~~ | 已创建：https://github.com/person-clouds/dsh-context-guard |
 | 2 | ~~发布 npm `@fenghoer/dsh-context-guard@0.3.1`~~ | 已发布：https://www.npmjs.com/package/@fenghoer/dsh-context-guard |
 | 3 | 提交 awesome-dsh-plugin 市场条目 | 已提交 PR https://github.com/awesome-dsh-plugin/awesome-dsh-plugin/pull/15266；仓库创建未满 1 天，等待 CI 自动重跑 |
-| 4 | 宿主机安装插件并执行 `scripts/apply-profile.sh` | 沙箱对 `~/.dsh` 只读；需先执行 `dsh plugin --profile web add link:/home/zh/www/personalCloud/task/dsh-context-guard` 和 `dsh plugin --profile superagent add link:/home/zh/www/personalCloud/task/dsh-context-guard`，再跑迁移脚本 |
+| 4 | 宿主机安装插件并执行 `scripts/apply-profile.sh` | 沙箱对 `~/.dsh` 只读；需先执行 `dsh plugin --profile web add link:/home/zh/www/dsh-context-guard` 和 `dsh plugin --profile superagent add link:/home/zh/www/dsh-context-guard`，再跑迁移脚本 |
 | 5 | 重启 web/superagent 后验证 `--dump-config` 与 metrics | 需用户在宿主终端重启 DSH |
 | 6 | 用真实长输出验证 `maxOutputChars`、单轮门禁与落盘完整性 | 需重启 DSH |
 

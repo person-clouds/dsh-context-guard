@@ -7,7 +7,7 @@
 ## 当前结构
 
 ```text
-task/dsh-context-guard/
+dsh-context-guard/
 ├── package.json          # dsh.bundle.patch 指向 cordis.patch.yml
 ├── cordis.patch.yml      # 插入 context-guard 插件行
 ├── index.js              # Host-only 插件
@@ -22,7 +22,7 @@ task/dsh-context-guard/
 ## 一、创建独立公开仓库
 
 ```bash
-cd /home/zh/www/personalCloud/task/dsh-context-guard
+cd /home/zh/www/dsh-context-guard
 git init
 git add .
 git commit -m "feat: DSH 压缩归档插件"
@@ -36,7 +36,7 @@ GitHub 仓库添加 topic：`dsh-plugin`。
 ## 二、本地打包验证
 
 ```bash
-cd /home/zh/www/personalCloud/task/dsh-context-guard
+cd /home/zh/www/dsh-context-guard
 npm test
 npm pack --pack-destination release
 # 产物：release/dsh-context-guard-0.3.1.tgz

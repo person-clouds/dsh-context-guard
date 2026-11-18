@@ -26,7 +26,7 @@
 ## 3. 命名与目录
 
 ```text
-task/dsh-context-guard/
+dsh-context-guard/
 ├── package.json          # name=@fenghoer/dsh-context-guard，dsh.bundle.patch
 ├── cordis.patch.yml      # insert id=context-guard
 ├── index.js              # Host 插件入口

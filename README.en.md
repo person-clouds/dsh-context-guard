@@ -1,3 +1,8 @@
+---
+audience: shared
+status: current
+---
+
 [中文](README.md) | [English](README.en.md)
 
 # dsh-context-guard
@@ -29,13 +34,13 @@ Or from npm / a local checkout:
 ```bash
 dsh plugin --profile web add @fenghoer/dsh-context-guard
 # or
-dsh plugin --profile web add link:/home/zh/www/personalCloud/task/dsh-context-guard
+dsh plugin --profile web add link:/home/zh/www/dsh-context-guard
 ```
 
 Then run the host migration script (it checks the package is installed and backs up the profile first):
 
 ```bash
-task/dsh-context-guard/scripts/apply-profile.sh
+dsh-context-guard/scripts/apply-profile.sh
 ```
 
 The script:
@@ -136,15 +141,15 @@ Token savings are estimated as `chars/4`, and `STATUS.md` states this `estimateM
 ## inspect.sh
 
 ```bash
-task/dsh-context-guard/scripts/inspect.sh overview
-task/dsh-context-guard/scripts/inspect.sh service nginx
-task/dsh-context-guard/scripts/inspect.sh app qbittorrent
-task/dsh-context-guard/scripts/inspect.sh logs /var/log/syslog 80
-task/dsh-context-guard/scripts/inspect.sh git /home/zh/www/personalCloud
-task/dsh-context-guard/scripts/inspect.sh ports
-task/dsh-context-guard/scripts/inspect.sh docker
-task/dsh-context-guard/scripts/inspect.sh http http://127.0.0.1:3082/
-task/dsh-context-guard/scripts/inspect.sh report
+dsh-context-guard/scripts/inspect.sh overview
+dsh-context-guard/scripts/inspect.sh service nginx
+dsh-context-guard/scripts/inspect.sh app qbittorrent
+dsh-context-guard/scripts/inspect.sh logs /var/log/syslog 80
+dsh-context-guard/scripts/inspect.sh git /home/zh/www/personalCloud
+dsh-context-guard/scripts/inspect.sh ports
+dsh-context-guard/scripts/inspect.sh docker
+dsh-context-guard/scripts/inspect.sh http http://127.0.0.1:3082/
+dsh-context-guard/scripts/inspect.sh report
 ```
 
 Principles: no sudo, no service start/stop, and every section has line/byte limits. If `linuxops` exists, only read-only subcommands (`sysinfo`, `network ports`, `service status/logs`) are used; otherwise it falls back to `systemctl` / `journalctl` / `ss`.
@@ -158,8 +163,8 @@ Machine-private extensions belong in `~/.dsh/context-guard/inspect.local.sh` and
 | Option | Who it is for | Command |
 |---|---|---|
 | A. Do not install | Only system tools needed | Nothing to do; `inspect.sh` falls back automatically |
-| B. Plugin read-only compatibility shim | No upstream binary, but unified output wanted | `task/dsh-context-guard/scripts/install-linuxops.sh` |
-| C. Install your own/upstream binary | Already built/downloaded a trusted `linuxops` | `task/dsh-context-guard/scripts/install-linuxops.sh --binary /path/to/linuxops` |
+| B. Plugin read-only compatibility shim | No upstream binary, but unified output wanted | `dsh-context-guard/scripts/install-linuxops.sh` |
+| C. Install your own/upstream binary | Already built/downloaded a trusted `linuxops` | `dsh-context-guard/scripts/install-linuxops.sh --binary /path/to/linuxops` |
 
 Option B installs a bundled read-only compatibility shim, **not the upstream linuxops project**. It implements only the four interfaces used by `inspect.sh`:
 
@@ -174,24 +179,24 @@ Install, verify and uninstall:
 
 ```bash
 # Install to ~/.local/bin/linuxops (no sudo)
-task/dsh-context-guard/scripts/install-linuxops.sh
+dsh-context-guard/scripts/install-linuxops.sh
 
 # Add to PATH if needed, or pass LINUXOPS_BIN explicitly
 export PATH="$HOME/.local/bin:$PATH"
 linuxops --version
-LINUXOPS_BIN="$HOME/.local/bin/linuxops" task/dsh-context-guard/scripts/inspect.sh overview
+LINUXOPS_BIN="$HOME/.local/bin/linuxops" dsh-context-guard/scripts/inspect.sh overview
 
 # Force reinstall / uninstall
-task/dsh-context-guard/scripts/install-linuxops.sh --force
-task/dsh-context-guard/scripts/install-linuxops.sh --uninstall
+dsh-context-guard/scripts/install-linuxops.sh --force
+dsh-context-guard/scripts/install-linuxops.sh --uninstall
 ```
 
 For option C, follow your chosen upstream README; then hand the binary to the installer. The plugin does not copy or overwrite upstream source:
 
 ```bash
 # Example: build in a trusted source directory first, producing ./linuxops
-task/dsh-context-guard/scripts/install-linuxops.sh --binary ./linuxops --force
-LINUXOPS_BIN="$HOME/.local/bin/linuxops" task/dsh-context-guard/scripts/inspect.sh report
+dsh-context-guard/scripts/install-linuxops.sh --binary ./linuxops --force
+LINUXOPS_BIN="$HOME/.local/bin/linuxops" dsh-context-guard/scripts/inspect.sh report
 ```
 
 Notes:
@@ -235,7 +240,7 @@ Notes:
 ## Tests
 
 ```bash
-cd task/dsh-context-guard && npm test
+cd dsh-context-guard && npm test
 ```
 
 Coverage: compaction archive, command classification/budgets, bounded rendering, large-output archival, deduplication, line-level diffs, per-turn call and output gates, command-shape deny/ask with merged `ask`, metrics, expiry cleanup, risky-command detection, plus `inspect.sh` syntax and help.

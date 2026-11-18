@@ -1,3 +1,8 @@
+---
+audience: shared
+status: current
+---
+
 [中文](README.md) | [English](README.en.md)
 
 # dsh-context-guard
@@ -29,13 +34,13 @@ dsh plugin --profile web add https://github.com/person-clouds/dsh-context-guard/
 ```bash
 dsh plugin --profile web add @fenghoer/dsh-context-guard
 # 或
-dsh plugin --profile web add link:/home/zh/www/personalCloud/task/dsh-context-guard
+dsh plugin --profile web add link:/home/zh/www/dsh-context-guard
 ```
 
 然后执行宿主机迁移脚本（会先检查包已安装、备份 profile）：
 
 ```bash
-task/dsh-context-guard/scripts/apply-profile.sh
+dsh-context-guard/scripts/apply-profile.sh
 ```
 
 脚本做三件事：
@@ -138,15 +143,15 @@ token 节省按 `chars/4` 估算，并在 `STATUS.md` 明确标注 `estimateMeth
 ## inspect.sh
 
 ```bash
-task/dsh-context-guard/scripts/inspect.sh overview
-task/dsh-context-guard/scripts/inspect.sh service nginx
-task/dsh-context-guard/scripts/inspect.sh app qbittorrent
-task/dsh-context-guard/scripts/inspect.sh logs /var/log/syslog 80
-task/dsh-context-guard/scripts/inspect.sh git /home/zh/www/personalCloud
-task/dsh-context-guard/scripts/inspect.sh ports
-task/dsh-context-guard/scripts/inspect.sh docker
-task/dsh-context-guard/scripts/inspect.sh http http://127.0.0.1:3082/
-task/dsh-context-guard/scripts/inspect.sh report
+dsh-context-guard/scripts/inspect.sh overview
+dsh-context-guard/scripts/inspect.sh service nginx
+dsh-context-guard/scripts/inspect.sh app qbittorrent
+dsh-context-guard/scripts/inspect.sh logs /var/log/syslog 80
+dsh-context-guard/scripts/inspect.sh git /home/zh/www/personalCloud
+dsh-context-guard/scripts/inspect.sh ports
+dsh-context-guard/scripts/inspect.sh docker
+dsh-context-guard/scripts/inspect.sh http http://127.0.0.1:3082/
+dsh-context-guard/scripts/inspect.sh report
 ```
 
 原则：不使用 sudo、不启停服务、每段输出有行数/字节上限。检测到 `linuxops` 时只调用 `sysinfo`、`network ports`、`service status/logs` 等只读子命令，不存在则回退 `systemctl`/`journalctl`/`ss`。
@@ -160,8 +165,8 @@ task/dsh-context-guard/scripts/inspect.sh report
 | 方案 | 适合谁 | 命令 |
 |---|---|---|
 | A. 不安装 | 只想用系统自带命令 | 无需操作；`inspect.sh` 自动回退 |
-| B. 插件只读兼容层 | 没有上游二进制，想直接获得统一输出 | `task/dsh-context-guard/scripts/install-linuxops.sh` |
-| C. 安装自建/上游二进制 | 已按上游 README 构建或下载了可信的 `linuxops` | `task/dsh-context-guard/scripts/install-linuxops.sh --binary /path/to/linuxops` |
+| B. 插件只读兼容层 | 没有上游二进制，想直接获得统一输出 | `dsh-context-guard/scripts/install-linuxops.sh` |
+| C. 安装自建/上游二进制 | 已按上游 README 构建或下载了可信的 `linuxops` | `dsh-context-guard/scripts/install-linuxops.sh --binary /path/to/linuxops` |
 
 方案 B 安装的是本插件自带的只读兼容层，**不是上游 linuxops 项目**。它只实现 `inspect.sh` 用到的四个接口：
 
@@ -176,24 +181,24 @@ linuxops network ports
 
 ```bash
 # 安装到 ~/.local/bin/linuxops（不需要 sudo）
-task/dsh-context-guard/scripts/install-linuxops.sh
+dsh-context-guard/scripts/install-linuxops.sh
 
 # 不在 PATH 时按提示加入，或直接显式指定
 export PATH="$HOME/.local/bin:$PATH"
 linuxops --version
-LINUXOPS_BIN="$HOME/.local/bin/linuxops" task/dsh-context-guard/scripts/inspect.sh overview
+LINUXOPS_BIN="$HOME/.local/bin/linuxops" dsh-context-guard/scripts/inspect.sh overview
 
 # 覆盖重装 / 卸载
-task/dsh-context-guard/scripts/install-linuxops.sh --force
-task/dsh-context-guard/scripts/install-linuxops.sh --uninstall
+dsh-context-guard/scripts/install-linuxops.sh --force
+dsh-context-guard/scripts/install-linuxops.sh --uninstall
 ```
 
 方案 C 的构建步骤以你选择的 linuxops 上游 README 为准；构建完成后把二进制交给安装脚本，插件不复制、不覆盖上游源码：
 
 ```bash
 # 示例：先在你信任的源码目录构建，产物为 ./linuxops
-task/dsh-context-guard/scripts/install-linuxops.sh --binary ./linuxops --force
-LINUXOPS_BIN="$HOME/.local/bin/linuxops" task/dsh-context-guard/scripts/inspect.sh report
+dsh-context-guard/scripts/install-linuxops.sh --binary ./linuxops --force
+LINUXOPS_BIN="$HOME/.local/bin/linuxops" dsh-context-guard/scripts/inspect.sh report
 ```
 
 注意：
@@ -237,7 +242,7 @@ LINUXOPS_BIN="$HOME/.local/bin/linuxops" task/dsh-context-guard/scripts/inspect.
 ## 测试
 
 ```bash
-cd task/dsh-context-guard && npm test
+cd dsh-context-guard && npm test
 ```
 
 测试覆盖：压缩归档、命令分类/预算、有界渲染、大输出落盘、去重、行级 diff、单轮调用与累计输出门禁、硬上限自动「继续」标记与 3 次预算、命令形态 deny/ask 与合并 `ask`、指标、过期清理、风险命令识别、文档提交门禁（坏文档拒绝、修复后放行）、`inspect.sh` 语法与帮助、Web 客户端语法。
