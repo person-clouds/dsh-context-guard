@@ -1,7 +1,7 @@
 # DSH 上下文压缩：依据、成本与调参
 
 > 记录日期：2026-11-10
-> 用途：会话与压缩规则见 [`task-workflow.md`](../../personalCloud/workspace/_meta/doc/task-workflow.md) 第 7 节；本文件放**源码依据、成本换算和调参方式**。
+> 用途：会话与压缩规则见 [`task-workflow.md`](../../doc/specs/task-workflow.md) 第 7 节；本文件放**源码依据、成本换算和调参方式**。
 > 结论一句话：**自动压缩默认就开着，不用手动 `/compact`，也不要自造绝对 token 阈值。**
 
 ## 1. 问题
@@ -88,7 +88,7 @@ T / (T − R) = 0.8 / (0.8 − 0.16) ≈ 1.25
 这类估算只用于判断量级，**不要当成账单预测**。
 
 结论：压缩主要买「延迟平稳 + 质量稳定」，不是买「省钱」。
-省钱的主要杠杆在源头——少往上下文里搬无关内容（见 [`task-workflow.md`](../../personalCloud/workspace/_meta/doc/task-workflow.md) 第 7 节）。
+省钱的主要杠杆在源头——少往上下文里搬无关内容（见 [`task-workflow.md`](../../doc/specs/task-workflow.md) 第 7 节）。
 
 ### 4.5 2026-11-10 实测：为什么「卡」不能反推「上下文大」
 
