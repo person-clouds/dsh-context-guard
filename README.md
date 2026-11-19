@@ -103,7 +103,7 @@ dsh --profile web --dump-config | grep -E "context-guard|maxOutputChars|tool-res
 | 数据库 | `DROP DATABASE/TABLE`、`TRUNCATE TABLE`、无 `WHERE` 的 `DELETE FROM` |
 | 提权/清历史 | `sudo`、`doas`、`su -`、`history -c` |
 
-`rm` 目标全部位于 `/tmp`、`/var/tmp`、`$TMPDIR` / `${TMPDIR}` 下，或全部位于测试目录（`test`、`tests`、`__tests__`、`test-*`、`*-test`、`*.test`、`*.spec`）时跳过 `destructive-rm`；目标等于临时目录本身、含 `..`/`*`/`?`/`[`，或使用 `sudo`、`xargs`、命令替换/反引号时不放行。`repo-delete`、`find-delete` 等规则不受影响。`sudo -n true`（及 `sudo -n -v`）这类无副作用探测，以及 `sudo -n` 加只读检查命令（如 `ls`、`stat`、`cat`、`grep`、`systemctl status` 等）不触发 `privilege-escalation`，其他 `sudo` 命令仍会提示；`touch <write-test 文件> && rm <同一文件>`、`f=$(mktemp /tmp/...) && rm -f "$f"` 这类自清理写权限探测也不触发 `destructive-rm`。
+`rm` 目标全部位于 `/tmp`、`/var/tmp`、`$TMPDIR` / `${TMPDIR}` 或 `~/opt`（含实际路径 `/home/<user>/opt`）下，或全部位于测试目录（`test`、`tests`、`__tests__`、`test-*`、`*-test`、`*.test`、`*.spec`）时跳过 `destructive-rm`；白名单只放行逐个列出的具体文件/目录，`/tmp`、`~/opt` 本身与通配（如 `rm -rf /tmp/*`、`rm -rf ~/opt/*`）仍拦截；含 `..`/`*`/`?`/`[`，或使用 `sudo`、`xargs`、命令替换/反引号时不放行。`repo-delete`、`find-delete` 等规则不受影响。`sudo -n true`（及 `sudo -n -v`）这类无副作用探测，以及 `sudo -n` 加只读检查命令（如 `ls`、`stat`、`cat`、`grep`、`systemctl status` 等）不触发 `privilege-escalation`，其他 `sudo` 命令仍会提示；`touch <write-test 文件> && rm <同一文件>`、`f=$(mktemp /tmp/...) && rm -f "$f"` 这类自清理写权限探测也不触发 `destructive-rm`。
 
 默认链接白名单：`localhost`、`127.0.0.1`、`[::1]`、`github.com`、`gitee.com`、`raw.githubusercontent.com`；可用 `riskAllowHosts` 覆盖。规则是正则启发式，可能误报或漏报，高风险生产操作仍应人工复核。
 
