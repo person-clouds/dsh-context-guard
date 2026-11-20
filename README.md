@@ -15,7 +15,7 @@ DSH Host-only 插件：把长工具输出挡在上下文之外，同时保留完
 
 1. **有界摘要**：输出超过预算时，完整文本写盘，上下文只保留 head/tail、命令类型和文件路径；
 2. **去重**：同一 session + tool + args 在 10 分钟内结果相同，只回上一次 call 的指针；结果变化只回行级 diff；
-3. **单轮调用门禁**：单轮 bash 每达到 `maxCallsPerTurn`（默认 20，即 20/40/60）返回一次 `ask` 审批提醒，会话列表显示黄色待处理点；达到 `hardMaxCallsPerTurn`（默认 80）时拒绝并由 Web 自动填入「继续」；
+3. **单轮调用门禁**：单轮 bash 达到 `maxCallsPerTurn`（默认 80，即第 80 次）返回一次 `ask` 审批提醒，会话列表显示黄色待处理点；达到 `hardMaxCallsPerTurn`（默认 160）时拒绝并由 Web 自动填入「继续」；
 4. **单轮累计输出门禁**：本轮累计进入上下文超过 40KB 后，后续超过 800 字符的结果只回摘要 + 落盘路径；
 5. **命令形态拦截**：整文件 `cat`、无排除的家目录递归搜索、裸 `curl` API 默认 `deny` 并提示 `read`/`grep`/`jq` 等有界替代；可切 `ask`；同时注入系统提示引导；
 6. **只读诊断**：`scripts/inspect.sh` 用固定模式替代零散命令；
@@ -75,7 +75,7 @@ dsh --profile web --dump-config | grep -E "context-guard|maxOutputChars|tool-res
 
 ## 单轮门禁与命令提示
 
-- 调用门禁：同一轮 bash 每 20 次返回一次 `ask` 提醒（默认 20/40/60），会话列表显示黄色 pending 点，审批浮窗可点继续或取消；第 80 次起 `deny`。监听 `session/event` 的 `turn/start` 清零；缺少该事件时退化为按 session 计数并记 warning。门禁文案同时显示“本轮 bash 调用次数”和当前 `session step`，两者不是同一口径。
+- 调用门禁：同一轮 bash 每 80 次返回一次 `ask` 提醒（默认第 80 次），会话列表显示黄色 pending 点，审批浮窗可点继续或取消；第 160 次起 `deny`。监听 `session/event` 的 `turn/start` 清零；缺少该事件时退化为按 session 计数并记 warning。门禁文案同时显示“本轮 bash 调用次数”和当前 `session step`，两者不是同一口径。
 - 累计输出门禁：本轮实际进入上下文的字符数超过 `maxTurnOutputChars=40000` 后，后续超过 `exhaustedOutputChars=800` 的结果完整落盘，上下文只留 800 字符以内摘要 + 路径。
 - 命令拦截：默认 `commandLintMode: deny`。整文件 `cat` 提示改用 `read` 工具（或 `sed -n '1,120p'`）；无排除递归搜索提示改用 `grep`/`glob` 工具或加 `--glob '!**/node_modules/**'`；裸 `curl .../api/...` 提示改用 `| jq '{field1,field2}'` 或 `-o /tmp/out.json` 后再查询。
 - DSH 不支持在 `tools/pre-execute` 中改写工具参数，所以插件不会自动把 `cat` 替换成 `read`；它只拒绝当前调用，并在模型可见的 `reason` 中给出替代命令，由模型重新发起有界调用。
@@ -84,9 +84,9 @@ dsh --profile web --dump-config | grep -E "context-guard|maxOutputChars|tool-res
 
 写盘失败时回退原始结果，不丢证据。
 
-## 每 20 次提醒与硬上限自动填入「继续」
+## 每 80 次提醒与硬上限自动填入「继续」
 
-单轮 bash 每达到 `maxCallsPerTurn`（默认 20）时返回一次 `ask` 审批提醒；该提醒会进入 DSH 的待处理交互，会话列表对应会话名前面会显示黄色小点。打开会话后可在审批浮窗点“允许一次”继续，或取消本次调用。达到 `hardMaxCallsPerTurn`（默认 80）时，本轮返回带机器标记 `context-guard:hard-limit-draft` 的拒绝结果。Web 客户端检测到该标记且输入框为空时，自动写入 `继续`；不会自动发送，按 Enter 才继续。同一 session 最多自动写入 3 次，同一 turn 最多 1 次。Web 只在会话打开时提供输入框；打开会话时若最近 30 分钟内已有该事件、输入框为空，也会补写，因此事后打开不会错过。更新插件后需重启 DSH Web 并刷新页面。Desktop/TUI 不加载 Web 客户端，静默降级为原始拒绝文案。
+单轮 bash 每达到 `maxCallsPerTurn`（默认 80）时返回一次 `ask` 审批提醒；该提醒会进入 DSH 的待处理交互，会话列表对应会话名前面会显示黄色小点。打开会话后可在审批浮窗点“允许一次”继续，或取消本次调用。达到 `hardMaxCallsPerTurn`（默认 160）时，本轮返回带机器标记 `context-guard:hard-limit-draft` 的拒绝结果。Web 客户端检测到该标记且输入框为空时，自动写入 `继续`；不会自动发送，按 Enter 才继续。同一 session 最多自动写入 3 次，同一 turn 最多 1 次。Web 只在会话打开时提供输入框；打开会话时若最近 30 分钟内已有该事件、输入框为空，也会补写，因此事后打开不会错过。更新插件后需重启 DSH Web 并刷新页面。Desktop/TUI 不加载 Web 客户端，静默降级为原始拒绝文案。
 ## 风险命令警示
 
 `tools/pre-execute` 在 DSH 自身权限策略通过后再做一层保底检查。命中规则时返回 `ask`，由 DSH 审批端弹出确认；用户不确认则命令不执行。它不修改命令、不做沙箱，也不替代 DSH 的权限/审批策略。默认检查 `bash` / `persistent-bash` / `terminal-bash` 与 `web_fetch`。
@@ -220,8 +220,8 @@ LINUXOPS_BIN="$HOME/.local/bin/linuxops" dsh-context-guard/scripts/inspect.sh re
         headChars: 1200
         tailChars: 800
         hardMaxChars: 6000
-        maxCallsPerTurn: 20              # 每 20 次弹一次审批提醒
-        hardMaxCallsPerTurn: 80          # 第 80 次硬拒绝并自动填「继续」
+        maxCallsPerTurn: 80              # 第 80 次弹一次审批提醒
+        hardMaxCallsPerTurn: 160         # 第 160 次硬拒绝并自动填「继续」
         maxTurnOutputChars: 40000
         exhaustedOutputChars: 800
         commandLintEnabled: true

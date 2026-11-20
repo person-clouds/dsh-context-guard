@@ -82,18 +82,25 @@ if '- id: context-guard' not in text:
     - id: context-guard
       name: '@fenghoer/dsh-context-guard'
       config:
-        maxCallsPerTurn: 20
-        hardMaxCallsPerTurn: 80
+        maxCallsPerTurn: 80
+        hardMaxCallsPerTurn: 160
 """
     changed = True
 
 # 1b) 旧 context-guard 插入项补上显式阈值配置；已有配置不覆盖。
 text = re.sub(
     r"(- id: context-guard\n      name: '@fenghoer/dsh-context-guard')\n(?=\n|$)",
-    r"\1\n      config:\n        maxCallsPerTurn: 20\n        hardMaxCallsPerTurn: 80\n",
+    r"\1\n      config:\n        maxCallsPerTurn: 80\n        hardMaxCallsPerTurn: 160\n",
     text,
 )
-changed = True if 'hardMaxCallsPerTurn: 80' in text else changed
+changed = True if 'hardMaxCallsPerTurn: 160' in text else changed
+
+# 1c) 旧默认阈值（20/80）升级为 80/160，重复执行幂等。
+text_before_upgrade = text
+text = text.replace('maxCallsPerTurn: 20', 'maxCallsPerTurn: 80')
+text = text.replace('hardMaxCallsPerTurn: 80', 'hardMaxCallsPerTurn: 160')
+if text != text_before_upgrade:
+    changed = True
 
 # 2) persistent-bash 不在 profile 顶层，旧写法会报 patch: entry not found。
 #    删除旧块，改为覆盖 minimal preset 的完整 plugins 列表。

@@ -44,32 +44,26 @@ assert.ok(bounded.endsWith('F'))
 
 // 单轮调用与累计输出门禁
 const turnWarnings = []
-const turnBudget = new TurnBudget({ maxCallsPerTurn: 20, hardMaxCallsPerTurn: 80, maxTurnOutputChars: 100, logger: { warn(...args) { turnWarnings.push(args) } } })
+const turnBudget = new TurnBudget({ maxCallsPerTurn: 80, hardMaxCallsPerTurn: 160, maxTurnOutputChars: 100, logger: { warn(...args) { turnWarnings.push(args) } } })
 turnBudget.startTurn('turn-test', 1)
 turnBudget.noteStep('turn-test', 7)
-for (let index = 1; index <= 19; index++) assert.equal(turnBudget.checkCall('turn-test').action, 'allow')
-const unitAsk20 = turnBudget.checkCall('turn-test')
-assert.equal(unitAsk20.action, 'ask')
-assert.equal(unitAsk20.count, 20)
-assert.equal(unitAsk20.step, 7)
-for (let index = 21; index <= 39; index++) assert.equal(turnBudget.checkCall('turn-test').action, 'allow')
-const unitAsk40 = turnBudget.checkCall('turn-test')
-assert.equal(unitAsk40.action, 'ask')
-assert.equal(unitAsk40.count, 40)
-for (let index = 41; index <= 59; index++) assert.equal(turnBudget.checkCall('turn-test').action, 'allow')
-assert.equal(turnBudget.checkCall('turn-test').action, 'ask')
-for (let index = 61; index <= 79; index++) assert.equal(turnBudget.checkCall('turn-test').action, 'allow')
-const unitDeny80 = turnBudget.checkCall('turn-test')
-assert.equal(unitDeny80.action, 'deny')
-assert.equal(unitDeny80.count, 80)
+for (let index = 1; index <= 79; index++) assert.equal(turnBudget.checkCall('turn-test').action, 'allow')
+const unitAsk80 = turnBudget.checkCall('turn-test')
+assert.equal(unitAsk80.action, 'ask')
+assert.equal(unitAsk80.count, 80)
+assert.equal(unitAsk80.step, 7)
+for (let index = 81; index <= 159; index++) assert.equal(turnBudget.checkCall('turn-test').action, 'allow')
+const unitDeny160 = turnBudget.checkCall('turn-test')
+assert.equal(unitDeny160.action, 'deny')
+assert.equal(unitDeny160.count, 160)
 assert.equal(turnBudget.consumeOutput('turn-test', 101).exhausted, true)
 assert.equal(turnBudget.isExhausted('turn-test'), true)
 turnBudget.startTurn('turn-test', 2)
 assert.equal(turnBudget.checkCall('turn-test').action, 'allow')
 assert.equal(turnBudget.isExhausted('turn-test'), false)
 const fallbackBudget = new TurnBudget({ logger: { warn(...args) { turnWarnings.push(args) } } })
-assert.equal(fallbackBudget.maxCallsPerTurn, 20)
-assert.equal(fallbackBudget.hardMaxCallsPerTurn, 80)
+assert.equal(fallbackBudget.maxCallsPerTurn, 80)
+assert.equal(fallbackBudget.hardMaxCallsPerTurn, 160)
 assert.equal(fallbackBudget.maxTurnOutputChars, 40000)
 assert.equal(fallbackBudget.exhaustedOutputChars, 800)
 assert.equal(fallbackBudget.checkCall('fallback-session').action, 'allow')
@@ -364,35 +358,25 @@ assert.match(mergedAsked.reason, /whole-file-cat/)
 assert.match(mergedAsked.displayReason.zh, /风险命令需要确认/)
 assert.match(mergedAsked.displayReason.zh, /替代/)
 
-// 每 20 次 bash 提醒一次；第 80 次返回带标记的 deny（自动填「继续」）；新 turn 清零
+// 每 80 次 bash 提醒一次；第 160 次返回带标记的 deny（自动填「继续」）；新 turn 清零
 const gateExec = { ...safeExec, agent: { id: 'session-gate' } }
 await handlers.get('session/event')[0]({ id: 'session-gate' }, { type: 'turn/start', data: { turn: 1 } })
 await handlers.get('session/event')[0]({ id: 'session-gate' }, { type: 'step/start', data: { step: 7 } })
-for (let index = 1; index <= 19; index++) {
+for (let index = 1; index <= 79; index++) {
   assert.equal((await preExecute(gateExec, async () => ({ kind: 'allow' }))).kind, 'allow')
 }
-const ask20 = await preExecute(gateExec, async () => ({ kind: 'allow' }))
-assert.equal(ask20.kind, 'ask')
-assert.match(ask20.reason, /提醒点/)
-assert.match(ask20.reason, /每 20 次/)
-for (let index = 21; index <= 39; index++) {
+const ask80 = await preExecute(gateExec, async () => ({ kind: 'allow' }))
+assert.equal(ask80.kind, 'ask')
+assert.match(ask80.reason, /提醒点/)
+assert.match(ask80.reason, /每 80 次/)
+for (let index = 81; index <= 159; index++) {
   assert.equal((await preExecute(gateExec, async () => ({ kind: 'allow' }))).kind, 'allow')
 }
-const ask40 = await preExecute(gateExec, async () => ({ kind: 'allow' }))
-assert.equal(ask40.kind, 'ask')
-assert.match(ask40.reason, /提醒点/)
-for (let index = 41; index <= 59; index++) {
-  assert.equal((await preExecute(gateExec, async () => ({ kind: 'allow' }))).kind, 'allow')
-}
-assert.equal((await preExecute(gateExec, async () => ({ kind: 'allow' }))).kind, 'ask')
-for (let index = 61; index <= 79; index++) {
-  assert.equal((await preExecute(gateExec, async () => ({ kind: 'allow' }))).kind, 'allow')
-}
-const deny80 = await preExecute(gateExec, async () => ({ kind: 'allow' }))
-assert.equal(deny80.kind, 'deny')
-assert.match(deny80.reason, /硬上限/)
-assert.match(deny80.reason, /session step 7/)
-assert.ok(deny80.reason.includes(HARD_LIMIT_DRAFT_MARKER))
+const deny160 = await preExecute(gateExec, async () => ({ kind: 'allow' }))
+assert.equal(deny160.kind, 'deny')
+assert.match(deny160.reason, /硬上限/)
+assert.match(deny160.reason, /session step 7/)
+assert.ok(deny160.reason.includes(HARD_LIMIT_DRAFT_MARKER))
 await handlers.get('session/event')[0]({ id: 'session-gate' }, { type: 'turn/start', data: { turn: 2 } })
 assert.equal((await preExecute(gateExec, async () => ({ kind: 'allow' }))).kind, 'allow')
 

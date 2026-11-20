@@ -20,8 +20,8 @@
 - [x] 清理：7 天保留、单会话 50MB/300 文件、全局 500MB，删除最旧文件，保留当前会话最近 3 个；
 - [x] `scripts/inspect.sh`：overview/service/app/logs/git/ports/docker/http/report，只读、有界输出、可选 linuxops 只读子命令；
 - [x] `tools/pre-execute` 风险命令警示：删除/仓库删除、git 强推/重置、下载执行、未知链接（含 `web_fetch`）、关机停服、容器/数据库删除、提权等返回 `ask` 让用户确认；不覆盖已有 deny/cancel/ask。
-- [x] 单轮 bash 调用门禁：第 21 次起 `ask`（同一轮只问一次），第 40 次起 `deny`；`turn/start` 重置，缺事件时按 session 退化计数并 warning；
-- [x] 软上限自动继续：单轮 bash 达到 `maxCallsPerTurn`（默认 20）即暂停本轮，deny reason 带 `context-guard:hard-limit-draft`；Web 客户端在输入框为空时写入 `继续`（无换行、不自动发送）；`hardMaxCallsPerTurn`（默认 40）仅兜底；同 session 最多 3 次、同 turn 最多 1 次；Desktop/TUI 静默降级；
+- [x] 单轮 bash 调用门禁：第 80 次 `ask`（同一轮只问一次），第 160 次起 `deny`；`turn/start` 重置，缺事件时按 session 退化计数并 warning；
+- [x] 软上限自动继续：单轮 bash 达到 `maxCallsPerTurn`（默认 80）即暂停本轮，deny reason 带 `context-guard:hard-limit-draft`；Web 客户端在输入框为空时写入 `继续`（无换行、不自动发送）；`hardMaxCallsPerTurn`（默认 160）仅兜底；同 session 最多 3 次、同 turn 最多 1 次；Desktop/TUI 静默降级；
 - [x] 修复 Web 自动继续不生效：组件内改为访问插件级 `pluginCtx`；同时兼容真实拒绝事件形状（`data.message.content[].text` + `isError`）与 `data.error.reason`；打开会话时对最近 30 分钟事件补写；新增 VM 集成测试；
 - [x] 临时目录/`~/opt` `rm` 豁免：目标全部位于 `/tmp`、`/var/tmp`、`$TMPDIR`/`${TMPDIR}`、`~/opt`（含实际路径 `/home/<user>/opt`）下时跳过 `destructive-rm`；只放行逐个列出的具体文件/目录，目录本身、`..`/通配符、`sudo`/`xargs`/命令替换仍拦截；门禁文案同时显示 bash 调用次数与 session step；
 - [x] 风险误报收敛：`sudo -n true`（及 `sudo -n -v`）与 `sudo -n` 只读检查命令（如 `ls`、`systemctl status`）不再触发 `privilege-escalation`；`rm` 目标全部位于 `test`/`tests`/`__tests__`/`test-*` 等测试目录时与临时目录一样跳过 `destructive-rm`；`touch <write-test 文件> && rm <同一文件>`、`f=$(mktemp /tmp/...) && rm -f "$f"` 自清理写权限探测同样放行；
@@ -75,3 +75,4 @@
 | 2026-11-19 | `npm test`（风险放行规则） | ok；覆盖构建产物类规则跨命令放行（./node_modules → ./dist、packages/a/build）、非产物目录/通配符/sudo 仍询问、链接规则只放行同一主机、下载执行仍拦截、审批 token 一次性消费与 Web「始终允许」按钮提交 |
 | 2026-11-18 | `npm test`（风险误报收敛） | ok；新增 `sudo -n true`/`-v` 与 `sudo -n` 只读命令、write-test 与 mktemp 自清理探测放行、test 目录 `rm` 豁免与危险边界断言 |
 | 2026-11-19 | `npm test`（`~/opt` rm 白名单） | ok；`~/opt`、`$HOME/opt`、`/home/zh/opt` 下逐个列出的具体路径放行；目录本身、`/tmp/*`、`~/opt/*`、`..`、`sudo`、混合非白名单目标仍拦截 |
+| 2026-11-20 | 提醒/硬上限放宽 | 单轮 bash 第 80 次返回一次 `ask`（黄色 pending 点）；第 160 次 deny + marker 并自动填「继续」；`maxCallsPerTurn=80`/`hardMaxCallsPerTurn=160` 同步到代码默认值、profile 模板、`apply-profile.sh`（含 20/80 → 80/160 迁移）与 web/superagent profile；`npm test` ok |

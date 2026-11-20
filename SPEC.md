@@ -18,7 +18,7 @@ status: current
 
 1. 有界摘要：超预算输出完整落盘，上下文只留 head/tail、命令类型与路径；
 2. 去重：同 session + tool + args 在 10 分钟内结果相同只回指针，变化只回行级 diff；
-3. 单轮调用门禁：每 `maxCallsPerTurn`（默认 20）返回一次 `ask`，达到 `hardMaxCallsPerTurn`（默认 80）拒绝；
+3. 单轮调用门禁：`maxCallsPerTurn`（默认 80，即第 80 次）返回一次 `ask`，达到 `hardMaxCallsPerTurn`（默认 160）拒绝；
 4. 单轮累计输出门禁：超过 `maxTurnOutputChars`（默认 40000）后，后续超 800 字符结果只回摘要 + 路径；
 5. 命令形态拦截：整文件 `cat`、无排除递归搜索、裸 `curl` API 默认 `deny`，可切 `ask`；
 6. 风险命令确认；`rm` 白名单覆盖 `/tmp`、`/var/tmp`、`$TMPDIR`/`${TMPDIR}`、`~/opt`（含实际路径）下逐个列出的具体路径，不放行目录本身或通配；用户可把已解析的风险命令保存为精确命令、构建产物清理类（含产物目录内 `rm` 尾部通配与 `find ... -delete`）或链接主机窄规则，后续同类命令自动放行；压缩前后写 `STATUS.md`、指标统计、按保留期与配额清磁盘。

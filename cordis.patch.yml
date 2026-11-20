@@ -3,5 +3,5 @@
     - id: context-guard
       name: '@fenghoer/dsh-context-guard'
       config:
-        maxCallsPerTurn: 20
-        hardMaxCallsPerTurn: 80
+        maxCallsPerTurn: 80
+        hardMaxCallsPerTurn: 160
