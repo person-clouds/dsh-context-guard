@@ -1,6 +1,6 @@
 # 发布到 DSH 插件市场
 
-> 状态：**npm `@fenghoer/dsh-context-guard@0.3.1` 已发布；GitHub Release `v0.3.1` 已发布；awesome-dsh-plugin PR #15266 已提交（等待仓库满 1 天的 CI 自动重跑）。**
+> 状态：**npm `@fenghoer/dsh-context-guard@0.3.1` 已发布；GitHub Release `v0.4.1` 已发布；`0.4.1` 的 npm 发布因 token 失效返回 404，待 `npm login` 后补发；awesome-dsh-plugin PR #15266 已合并。**
 > 目标仓库：`person-clouds/dsh-context-guard`
 > npm 包名：`@fenghoer/dsh-context-guard`（npm 上 `dsh-context-guard` 已被其他项目占用）
 
@@ -39,7 +39,7 @@ GitHub 仓库添加 topic：`dsh-plugin`。
 cd /home/zh/www/dsh-context-guard
 npm test
 npm pack --pack-destination release
-# 产物：release/dsh-context-guard-0.3.1.tgz
+# 产物：release/fenghoer-dsh-context-guard-0.4.1.tgz
 ```
 
 ## 三、发布 npm（需要先登录）
@@ -51,7 +51,7 @@ npm publish --registry=https://registry.npmjs.org --access public
 
 ## 四、创建 GitHub Release
 
-- tag：`v0.3.1`
+- tag：`v0.4.1`
 - 上传 `dsh-context-guard.tgz`（源码 tarball，无版本号文件名）
 - Release 资源名建议保持无版本号：`dsh-context-guard.tgz`
 
@@ -67,6 +67,6 @@ npm publish --registry=https://registry.npmjs.org --access public
 
 本地条目草稿：`market/person-clouds__dsh-context-guard.yml`。
 
-已提交 PR：https://github.com/awesome-dsh-plugin/awesome-dsh-plugin/pull/15266
+已合并 PR：https://github.com/awesome-dsh-plugin/awesome-dsh-plugin/pull/15266
 
 发布后的市场索引由 awesome-dsh-plugin 目录生成；DSH 的 Discover 索引源示例：`https://cdn.jsdelivr.net/npm/dsh-plugin-catalog/index.json`。
