@@ -1,6 +1,11 @@
-# dsh-context-guard 计划与实施步骤
+---
+implementation_status: in_progress
+created_at: 2026-11-14 20:26:18
+updated_at: 2026-11-20 22:00:00
+---
 
-> 状态：代码已实现（L1-L6），待宿主机执行 `scripts/apply-profile.sh` 并做真实会话验证。
+# PLAN：dsh-context-guard 计划与实施步骤
+
 > 原则：只做一个插件，能力统一收进 `dsh-context-guard`，不再拆 `dsh-bash-stats`、`dsh-tool-budget`、`dsh-output-archive`。
 
 ## 1. 目标
@@ -141,3 +146,9 @@ ${DSH_HOME:-$HOME/.dsh}/context-guard/metrics/<session-id>.jsonl
 - 实际输出测试：>30KB 命令、重复命令、变化命令、清理配额；
 - 风险测试：`rm -rf`、`git reset --hard`、`curl | bash`、未知链接、安全命令放行、已有 deny 不被覆盖；
 - 回滚：profile 条目改回旧插件名，或删除本插件条目；数据目录可手工保留/删除。
+
+## 改动记录
+
+| 时间 | 改动点 |
+|---|---|
+| 2026-11-20 22:00:00 | 计划迁入 `plans/`，补齐 frontmatter 与改动记录 |
