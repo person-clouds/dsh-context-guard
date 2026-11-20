@@ -27,6 +27,7 @@
 - [x] 风险误报收敛：`sudo -n true`（及 `sudo -n -v`）与 `sudo -n` 只读检查命令（如 `ls`、`systemctl status`）不再触发 `privilege-escalation`；`rm` 目标全部位于 `test`/`tests`/`__tests__`/`test-*` 等测试目录时与临时目录一样跳过 `destructive-rm`；`touch <write-test 文件> && rm <同一文件>`、`f=$(mktemp /tmp/...) && rm -f "$f"` 自清理写权限探测同样放行；
 - [x] 单轮累计输出门禁：本轮 emitted 超过 40000 字符后，后续 >800 字符结果完整落盘，上下文只回 ≤800 字符摘要 + 路径；
 - [x] 风险审批「始终允许」：Host 按短期 token 取回原始命令并重新解析，保存到 `context-guard/risk-allow.json`；构建产物清理按「项目前缀 + 产物目录」类规则泛化（如确认 `rm -rf ./node_modules` 后同项目 `./dist` 也放行），未知链接仅保存主机，无法证明安全类时退化为精确命令哈希；`./src`、`..`、`sudo` 等仍询问，产物目录内尾部通配与 `find ... -delete` 按同类规则处理；默认开启，可用 `riskAutoAllowEnabled`/`riskRuleFile` 配置；
+- [x] 「始终允许」失败可见化：保存失败时页面右下角提示错误码与 HTTP 状态（如 `approval-rule-expired（HTTP 410）`）并写浏览器控制台；超过 2 秒先提示「仍在保存」、完成后提示结果，15 秒超时；失败不消耗审批，仍可「允许一次」；
 - [x] 命令形态拦截：整文件 `cat`、无排除的 `~/.dsh`/家目录递归搜索、裸 `curl` API 默认返回 `deny` 并给 `read`/`grep`/`jq` 等替代；可配 `commandLintMode: ask`；同时注册系统提示引导；`ask` 模式下与风险规则合并为一次 `ask`；
 - [x] 文档提交门禁：`tools/pre-execute` 解析 `git commit` 目标仓，已登记仓库按中央策略运行 `scripts/check.sh --repo`，失败 `deny`；配置 `docGuardEnabled`/`docGuardWorkspaceRoot`/`docGuardTimeoutMs`；不自动改文件；
 - [x] `scripts/apply-profile.sh` 修复：检查 profile 已安装 scoped 包和失效的 `dsh-superagent` link；修正包名；删除顶层 `persistent-bash` 旧块，改为覆盖 minimal preset 的 `config.plugins` 并设 `maxOutputChars=65536`；`tool-result-pruner=6000/3000/1500`；重复执行幂等。
@@ -79,3 +80,4 @@
 | 2026-11-20 | `npm test` | ok（0.4.1 发布前回归） |
 | 2026-11-20 | npm publish `0.4.1` | ok（曾因 token/IP 报 403、404；用户更新 token 后发布成功，`npm view` 为 `0.4.1`） |
 | 2026-11-20 | GitHub Release `v0.4.1` | 资产 `dsh-context-guard.tgz` 51055 字节，`latest/download` 返回 200 |
+| 2026-11-20 | `npm test`（「始终允许」失败可见化） | ok；覆盖 HTTP 410、网络错误、缺 token 三条失败路径的提示与抛错，失败时不误答审批 |

@@ -107,7 +107,7 @@ dsh --profile web --dump-config | grep -E "context-guard|maxOutputChars|tool-res
 
 默认链接白名单：`localhost`、`127.0.0.1`、`[::1]`、`github.com`、`gitee.com`、`raw.githubusercontent.com`；可用 `riskAllowHosts` 覆盖。规则是正则启发式，可能误报或漏报，高风险生产操作仍应人工复核。
 
-风险审批卡在「允许一次」之外提供「始终允许」：Host 会按审批 reason 里的短期 token 取回原始命令并重新解析，只在 `${DSH_HOME:-~/.dsh}/context-guard/risk-allow.json` 保存窄规则。构建产物清理会解析成「项目前缀 + 产物目录」类规则：确认 `rm -rf ./node_modules` 后，同一项目下的 `rm -rf ./dist`、`rm -rf packages/a/build` 等自动放行；`./src`、`..`、`sudo`/`xargs`/命令替换仍会询问；`rm -rf ./node_modules/*` 这类产物目录内的尾部通配和 `find ./node_modules ... -delete` 也按同一类规则处理。若风险仅来自未知链接，则只保存该主机。无法证明为安全类时退化为完全相同的规范化命令哈希。其它命令形态拦截和 DSH 权限策略仍照常生效，规则不会按 `destructive-rm` 等代码做全量通配。可用 `riskAutoAllowEnabled: false` 关闭按钮与自动放行，或用 `riskRuleFile` 改规则文件位置；删除该 JSON 即可整体撤销。
+风险审批卡在「允许一次」之外提供「始终允许」：Host 会按审批 reason 里的短期 token 取回原始命令并重新解析，只在 `${DSH_HOME:-~/.dsh}/context-guard/risk-allow.json` 保存窄规则。构建产物清理会解析成「项目前缀 + 产物目录」类规则：确认 `rm -rf ./node_modules` 后，同一项目下的 `rm -rf ./dist`、`rm -rf packages/a/build` 等自动放行；`./src`、`..`、`sudo`/`xargs`/命令替换仍会询问；`rm -rf ./node_modules/*` 这类产物目录内的尾部通配和 `find ./node_modules ... -delete` 也按同一类规则处理。若风险仅来自未知链接，则只保存该主机。无法证明为安全类时退化为完全相同的规范化命令哈希。其它命令形态拦截和 DSH 权限策略仍照常生效，规则不会按 `destructive-rm` 等代码做全量通配。可用 `riskAutoAllowEnabled: false` 关闭按钮与自动放行，或用 `riskRuleFile` 改规则文件位置；删除该 JSON 即可整体撤销。点击「始终允许」后若失败，页面右下角会显示错误码与 HTTP 状态（如 `approval-rule-expired（HTTP 410）`）并写入浏览器控制台；保存超过 2 秒会先提示「仍在保存」，完成后提示结果；15 秒未返回按超时处理。失败不会消耗审批，仍可点「允许一次」。
 
 ## 去重与 diff
 

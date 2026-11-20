@@ -14,6 +14,9 @@ window.__ModuleLoader__.load({
     const RESTORE_WINDOW_MS = 30 * 60 * 1000
     const RISK_RULE_ENDPOINT = '/api/context-guard-risk-rule'
     const RISK_RULE_TOKEN_RE = /rule-token:\s*([a-f0-9]{16,64})/
+    const SLOW_NOTICE_MS = 2000
+    const REQUEST_TIMEOUT_MS = 15000
+    const NOTICE_ID = 'context-guard-notice'
     const budgets = new Map()
     let pluginCtx
 
@@ -102,17 +105,76 @@ window.__ModuleLoader__.load({
       return '“Always allow” parses the command into a safe-class rule: cleaning build artifacts (node_modules, dist, build, .cache, …) under the same project prefix is auto-allowed; unknown links allow only that host; when no safe class can be proven, only the exact command is remembered. High-risk codes are never wildcarded.'
     }
 
+    function showNotice(text) {
+      const doc = globalThis.document
+      if (!doc?.body || typeof doc.createElement !== 'function') return
+      let node = doc.getElementById(NOTICE_ID)
+      if (!node) {
+        node = doc.createElement('div')
+        node.id = NOTICE_ID
+        node.setAttribute('role', 'status')
+        node.style.cssText = 'position:fixed;right:16px;bottom:16px;z-index:2147483000;max-width:420px;padding:10px 14px;border-radius:8px;background:#1f2937;color:#fff;font-size:13px;line-height:1.5;box-shadow:0 4px 16px rgba(0,0,0,.3);white-space:pre-wrap'
+        doc.body.appendChild(node)
+      }
+      node.textContent = String(text)
+      node.style.display = 'block'
+      const schedule = globalThis.setTimeout
+      const cancel = globalThis.clearTimeout
+      if (node.__cgHideTimer !== undefined && typeof cancel === 'function') cancel(node.__cgHideTimer)
+      node.__cgHideTimer = typeof schedule === 'function'
+        ? schedule(() => { node.style.display = 'none' }, 8000)
+        : undefined
+    }
+
+    /** 失败必须可见：提示 + 控制台，错误码用于定位 Host 侧原因。 */
+    function riskRuleFailure(message) {
+      const text = `「始终允许」失败：${message}`
+      try { globalThis.console?.error?.('[context-guard]', text) } catch {}
+      showNotice(text)
+      return new Error(text)
+    }
+
     async function saveRiskRuleAndAllow(approval) {
       const token = riskRuleToken(approval.reason)
-      if (!token) throw new Error('missing risk rule token')
-      const response = await fetch(RISK_RULE_ENDPOINT, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ action: 'allow', token }),
-      })
-      const body = await response.json().catch(() => null)
+      if (!token) throw riskRuleFailure('审批信息里缺少放行 token，请重新触发风险命令后再试')
+      const startedAt = Date.now()
+      let slow = false
+      const slowTimer = typeof globalThis.setTimeout === 'function'
+        ? globalThis.setTimeout(() => {
+          slow = true
+          showNotice('「始终允许」仍在保存（已超过 2 秒），完成后会提示结果…')
+        }, SLOW_NOTICE_MS)
+        : undefined
+      const controller = typeof globalThis.AbortController === 'function' ? new globalThis.AbortController() : null
+      const timeout = controller && typeof globalThis.setTimeout === 'function'
+        ? globalThis.setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS)
+        : undefined
+      let response
+      try {
+        response = await fetch(RISK_RULE_ENDPOINT, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ action: 'allow', token }),
+          ...(controller ? { signal: controller.signal } : {}),
+        })
+      } catch (error) {
+        const reason = error?.name === 'AbortError'
+          ? `请求超过 ${Math.round(REQUEST_TIMEOUT_MS / 1000)} 秒未返回`
+          : (error?.message || String(error))
+        throw riskRuleFailure(reason)
+      } finally {
+        if (slowTimer !== undefined && typeof globalThis.clearTimeout === 'function') globalThis.clearTimeout(slowTimer)
+        if (timeout !== undefined && typeof globalThis.clearTimeout === 'function') globalThis.clearTimeout(timeout)
+      }
+      const body = typeof response.json === 'function' ? await response.json().catch(() => null) : null
       if (!response.ok || body?.ok !== true) {
-        throw new Error(body?.error || `risk rule request failed: ${response.status}`)
+        const detail = body?.error || 'unknown-error'
+        const hint = detail === 'approval-rule-expired' ? '；审批已超过 10 分钟或 Host 重启过，请重新触发命令' : ''
+        throw riskRuleFailure(`${detail}（HTTP ${response.status}）${hint}`)
+      }
+      if (slow) {
+        const seconds = ((Date.now() - startedAt) / 1000).toFixed(1)
+        showNotice(`「始终允许」已保存（耗时 ${seconds} 秒），同类命令后续会自动放行。`)
       }
       await approval.answer('allowed-once')
     }

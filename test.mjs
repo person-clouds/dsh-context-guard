@@ -666,6 +666,71 @@ assert.equal(docAllowed, null)
   assert.deepEqual(answers, ['allowed-once'])
   // 非本插件风险审批交给内置审批面板
   assert.equal(registered['conversation.composer'].select({ pendingInteraction: { kind: 'approval', reason: 'other' } }), null)
+
+  // 失败路径必须可见：HTTP 错误码 + 页面提示，且不误答审批
+  function mountClient(fetchImpl) {
+    const registered2 = {}
+    let plugin2
+    const notices = []
+    const doc = {
+      body: { appendChild(node) { notices.push(node) } },
+      getElementById: () => null,
+      createElement: () => ({ style: {}, setAttribute() {}, textContent: '' }),
+    }
+    const win2 = { __ModuleLoader__: { load: (m) => { plugin2 = m.factory((id) => id === 'react' ? React : undefined) } } }
+    vm.runInNewContext(clientSource, {
+      window: win2, console, fetch: fetchImpl, navigator: { language: 'zh-CN' },
+      document: doc, setTimeout, clearTimeout, AbortController,
+    })
+    plugin2.apply({
+      sessions: { binding: () => null },
+      slots: { inject(name, fn) { registered2[name] = fn() }, register(opts, Component) { return { ...opts, Component } } },
+    })
+    return { registered: registered2, notices }
+  }
+  const tokenReason = 'context-guard risk check (high): destructive-rm; command: rm -rf ./dist; rule-token: 0123456789abcdef01234567'
+  const makeApproval = (reason, seen) => ({
+    kind: 'approval', key: 'approval-risk-2', reason, displayReason: { zh: '风险命令需要确认' },
+    answerable: true, answer: async (outcome) => { seen.push(outcome) },
+  })
+  const failures = [
+    {
+      name: '410',
+      fetchImpl: async () => ({ ok: false, status: 410, json: async () => ({ ok: false, error: 'approval-rule-expired' }) }),
+      pattern: /approval-rule-expired（HTTP 410）/,
+    },
+    {
+      name: 'network',
+      fetchImpl: async () => { throw new TypeError('Failed to fetch') },
+      pattern: /Failed to fetch/,
+    },
+  ]
+  for (const item of failures) {
+    const mounted = mountClient(item.fetchImpl)
+    const seen = []
+    const rendered2 = mounted.registered['conversation.composer'].Component({
+      matched: makeApproval(tokenReason, seen),
+      t: (key) => key,
+      renderFactorySlot: (name, input) => ({ name, input }),
+    })
+    await assert.rejects(() => rendered2.input.onAlways(), item.pattern)
+    assert.equal(seen.length, 0)
+    assert.match(mounted.notices.at(-1).textContent, /「始终允许」失败/)
+    assert.match(mounted.notices.at(-1).textContent, item.name === '410' ? /approval-rule-expired/ : /Failed to fetch/)
+  }
+  // 缺少 token 时同样可见，不发请求
+  {
+    let calls = 0
+    const mounted = mountClient(async () => { calls += 1; return { ok: true, status: 200, json: async () => ({ ok: true }) } })
+    const rendered2 = mounted.registered['conversation.composer'].Component({
+      matched: makeApproval('context-guard risk check (high): destructive-rm; command: rm -rf ./dist', []),
+      t: (key) => key,
+      renderFactorySlot: (name, input) => ({ name, input }),
+    })
+    await assert.rejects(() => rendered2.input.onAlways(), /缺少放行 token/)
+    assert.equal(calls, 0)
+    assert.match(mounted.notices.at(-1).textContent, /「始终允许」失败/)
+  }
 }
 
 console.log('ok')
