@@ -1,6 +1,6 @@
 # 发布到 DSH 插件市场
 
-> 状态：**npm `@fenghoer/dsh-context-guard@0.3.1` 已发布；GitHub Release `v0.4.1` 已发布；`0.4.1` 的 npm 发布因 token 失效返回 404，待 `npm login` 后补发；awesome-dsh-plugin PR #15266 已合并。**
+> 状态：**npm `@fenghoer/dsh-context-guard@0.3.1` 已发布；GitHub Release `v0.4.1` 已发布；`0.4.1` 的 npm 发布因账号 2FA 保护返回 403（需 OTP 或 Bypass 2FA 的 granular token），暂无新版本可发；awesome-dsh-plugin PR #15266 已合并。**
 > 目标仓库：`person-clouds/dsh-context-guard`
 > npm 包名：`@fenghoer/dsh-context-guard`（npm 上 `dsh-context-guard` 已被其他项目占用）
 
