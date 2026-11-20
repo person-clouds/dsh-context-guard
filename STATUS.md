@@ -2,7 +2,7 @@
 
 - 更新时间：2026-11-20
 - 一句话：DSH 工具输出预算/落盘、去重、单轮调用/输出门禁、硬上限后 Web 自动填入「继续」、命令形态拦截、风险确认与窄规则自动放行、只读诊断、压缩归档与指标。
-- 位置：`dsh-context-guard/`；代码与测试已完成，待宿主机安装包并执行 `scripts/apply-profile.sh` 修复 web/superagent profile。
+- 位置：`dsh-context-guard/`；web profile 已按 link 加载并完成「始终允许」实机验证，superagent profile 待重启后核对。
 
 ## 已完成
 
@@ -44,6 +44,7 @@
 | 4 | 宿主机安装插件并执行 `scripts/apply-profile.sh` | 沙箱对 `~/.dsh` 只读；需先执行 `dsh plugin --profile web add link:/home/zh/www/dsh-context-guard` 和 `dsh plugin --profile superagent add link:/home/zh/www/dsh-context-guard`，再跑迁移脚本 |
 | 5 | 重启 web/superagent 后验证 `--dump-config` 与 metrics | 需用户在宿主终端重启 DSH |
 | 6 | 用真实长输出验证 `maxOutputChars`、单轮门禁与落盘完整性 | 需重启 DSH |
+| 7 | 「始终允许」真实故障取证 | A 阶段已上线错误码提示；需一次真实失败时的提示/控制台原文，再定 B（token 持久化 / 按 `callId` 查找）；计划见 [PLAN-risk-always-allow-fix.md](PLAN-risk-always-allow-fix.md) |
 
 ## 验证记录
 
