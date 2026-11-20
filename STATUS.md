@@ -81,3 +81,4 @@
 | 2026-11-20 | npm publish `0.4.1` | ok（曾因 token/IP 报 403、404；用户更新 token 后发布成功，`npm view` 为 `0.4.1`） |
 | 2026-11-20 | GitHub Release `v0.4.1` | 资产 `dsh-context-guard.tgz` 51055 字节，`latest/download` 返回 200 |
 | 2026-11-20 | `npm test`（「始终允许」失败可见化） | ok；覆盖 HTTP 410、网络错误、缺 token 三条失败路径的提示与抛错，失败时不误答审批 |
+| 2026-11-20 | Playwright 实机（web GUI） | 成功路径：新建会话→切「工作区内修改」→触发 `rm -f` 风险→点「始终允许」→POST 200、规则落盘、卡片关闭、命令执行；失败路径：拦截接口返回 410 时右下角提示 `approval-rule-expired（HTTP 410）` 且审批卡保持可回答；默认「完全权限」preset 为 `approval: never`，不会弹审批 |
