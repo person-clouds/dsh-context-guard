@@ -30,7 +30,7 @@
 - [x] 「始终允许」失败可见化：保存失败时页面右下角提示错误码与 HTTP 状态（如 `approval-rule-expired（HTTP 410）`）并写浏览器控制台；超过 2 秒先提示「仍在保存」、完成后提示结果，15 秒超时；失败不消耗审批，仍可「允许一次」；
 - [x] 「始终允许」填写原因：点击后先弹出原因输入框（必填、最多 200 字、压成单行），取消不保存也不消耗审批；原因随请求提交，Host 校验后再消费 token，缺原因返回 400 `reason-required`；原因作为规则标记 `reason` 写入 `risk-allow.json`，同一规则再次放行时覆盖为最新原因，`reason` 只用于复核、不参与匹配。
 - [x] 「始终允许」凭据失效修复：待放行项短期落盘为 `context-guard/risk-pending.json`（0600、TTL 10 分钟、最多 100 条），插件重载后同一 token 仍可消费；token 不在时按审批 `callId` 兜底，二者都没有才返回 410；落盘失败只 warning，不影响本次审批；规则仍只按安全类泛化。
-- [x] 命令形态拦截：整文件 `cat`、无排除的 `~/.dsh`/家目录递归搜索、裸 `curl` API 默认返回 `deny` 并给 `read`/`grep`/`jq` 等替代；可配 `commandLintMode: ask`；同时注册系统提示引导；`ask` 模式下与风险规则合并为一次 `ask`；
+- [x] 命令形态拦截：整文件 `cat`、无排除的 `~/.dsh`/家目录递归搜索、裸 `curl` API 默认返回 `deny` 并给有界替代；替代命令与系统提示按当前工具面渲染文件工具（dsh-ops 的 `ops_inspect_local_file`/`ops_grep`/`ops_glob`，否则官方 `read`/`grep`/`glob`），另含 `jq`；可配 `commandLintMode: ask`；`ask` 模式下与风险规则合并为一次 `ask`；
 - [x] 文档提交门禁：`tools/pre-execute` 解析 `git commit` 目标仓，已登记仓库按中央策略运行 `scripts/check.sh --repo`，失败 `deny`；配置 `docGuardEnabled`/`docGuardWorkspaceRoot`/`docGuardTimeoutMs`；不自动改文件；
 - [x] `scripts/apply-profile.sh` 修复：检查 profile 已安装 scoped 包和失效的 `dsh-superagent` link；修正包名；删除顶层 `persistent-bash` 旧块，改为覆盖 minimal preset 的 `config.plugins` 并设 `maxOutputChars=65536`；`tool-result-pruner=6000/3000/1500`；重复执行幂等。
 - [x] 中文 README 优先展示，补充英文 `README.en.md`；
@@ -87,3 +87,4 @@
 | 2026-11-20 | Playwright 实机（web GUI） | 成功路径：新建会话→切「工作区内修改」→触发 `rm -f` 风险→点「始终允许」→POST 200、规则落盘、卡片关闭、命令执行；失败路径：拦截接口返回 410 时右下角提示 `approval-rule-expired（HTTP 410）` 且审批卡保持可回答；默认「完全权限」preset 为 `approval: never`，不会弹审批 |
 | 2026-11-20 | `npm test`（「始终允许」原因） | ok；覆盖取消不提交、空原因留在弹窗提示、原因压成单行后提交、缺原因/纯空白 400 `reason-required` 且不消费 token、规则与 API 返回带 `reason`、同一规则原因覆盖、超长截到 200 字、`callId` 兜底带原因、重载后真实路由保存并放行 |
 | 2026-11-20 | `npm test`（待放行项落盘/`callId` 兜底） | ok；覆盖跨实例 token 复用、TTL 过期失效、无效 token + `callId` 兜底 200、`apply` 重载后旧 token 经真实路由保存并放行同类命令、客户端提交 `callId`、410/网络/缺 token 提示；实机生效需重启 DSH Host |
+| 2026-11-20 | `npm test`（命令提示跟随工具面） | ok；新增 `detectFileTools` 识别 `ops_*`/官方 `read`/两者皆无三种工具面，系统提示与 lint 替代命令按工具面渲染；实机生效需重启 DSH Host |

@@ -309,14 +309,53 @@ function callLimitDenyDecision(check) {
   }
 }
 
-const COMMAND_GUIDANCE = [
-  '工具使用约束（context-guard）：',
-  '- 读取文本文件优先使用 read 工具（offset/limit 分段），不要用 cat 整文件读取；除非用户明确要求或必须处理非文本文件。',
-  "- 递归搜索优先使用 grep/glob 工具；若必须用 shell，必须加 --glob '!**/node_modules/**' 等排除，不要直接全量扫描 ~/.dsh 或家目录。",
-  "- 调用 HTTP API 时先用 jq 裁剪字段，或 curl -o /tmp/out.json 落盘后再查询；不要直接输出裸 curl 大响应。",
-  '- 只有构建、测试、安装、服务运维等确实需要 shell 的任务才使用 bash。',
-  '- 违反上述形态的命令会被 context-guard 拒绝；请按拒绝信息中的替代命令重新调用。',
-].join('\n')
+const OFFICIAL_FILE_TOOLS = { read: 'read', grep: 'grep', glob: 'glob', discover: null }
+const OPS_FILE_TOOLS = { read: 'ops_inspect_local_file', grep: 'ops_grep', glob: 'ops_glob', discover: 'ops_discover_tools' }
+
+/** 读取当前工具面实际发布的文件工具：dsh-ops 的 ops_* 优先，其次官方 read/grep/glob，都没有则返回 null。
+ * scope/toolSet 为 DSH 组装系统提示时传入的视图（section 的 text 回调），用于看到本步真实可见的工具。 */
+export function detectFileTools(ctx, scope, toolSet) {
+  const tools = ctx?.tools ?? ctx?.get?.('tools')
+  const hasFrom = name => {
+    try {
+      return Boolean(tools?.get?.(name, scope, toolSet))
+    } catch {
+      return false
+    }
+  }
+  let names = null
+  try {
+    const definitions = tools?.definitions?.(scope, toolSet)
+    if (Array.isArray(definitions) && definitions.length > 0) {
+      names = new Set(definitions.map(definition => definition?.name).filter(Boolean))
+    }
+  } catch {
+    names = null
+  }
+  const has = name => (names ? names.has(name) : hasFrom(name))
+  if (has('ops_inspect_local_file')) {
+    return { ...OPS_FILE_TOOLS, discover: has('ops_discover_tools') ? 'ops_discover_tools' : null }
+  }
+  if (has('read')) return OFFICIAL_FILE_TOOLS
+  return null
+}
+
+export function commandGuidanceText(files) {
+  const lines = ['工具使用约束（context-guard）：']
+  if (files?.read && files?.grep && files?.glob) {
+    lines.push(`- 读取文本文件优先使用 \`${files.read}\`（offset/limit 分段），不要用 cat 整文件读取；搜索用 \`${files.grep}\`，查路径用 \`${files.glob}\`；除非用户明确要求或必须处理非文本文件。`)
+  } else {
+    lines.push('- 文件读取/搜索工具可能未常驻：先用工具发现（如 `ops_discover_tools`）加载，不要在 shell 里用 cat 或全量 grep 代替。')
+  }
+  lines.push("- 递归搜索必须带排除；若必须用 shell，加 --glob '!**/node_modules/**' 等，不要直接全量扫描 ~/.dsh 或家目录。")
+  lines.push('- 调用 HTTP API 时先用 jq 裁剪字段，或 curl -o /tmp/out.json 落盘后再查询；不要直接输出裸 curl 大响应。')
+  if (files?.discover) {
+    lines.push(`- 读 PDF/DOCX/CSV 等文档先用 \`${files.discover}\` 选择读取器（ops_read_pdf / ops_read_docx / ops_read_table），不要用 pdftotext 或 python 现场拼。`)
+  }
+  lines.push('- 只有构建、测试、安装、服务运维等确实需要 shell 的任务才使用 bash；大输出落盘后按路径用文件工具分段读，不要 cat 回去。')
+  lines.push('- 违反上述形态的命令会被 context-guard 拒绝；请按拒绝信息中的替代命令重新调用。')
+  return lines.join('\n')
+}
 
 function registerCommandGuidance(ctx, cfg) {
   if (!cfg.commandLintEnabled || !cfg.commandGuidanceEnabled) return
@@ -326,7 +365,8 @@ function registerCommandGuidance(ctx, cfg) {
     systemPrompt.section({
       name: 'context-guard:command-guidance',
       order: 490,
-      text: COMMAND_GUIDANCE,
+      // 按当前工具面渲染：装了 dsh-ops 时提示 ops_*，只有官方工具时提示 read/grep/glob。
+      text: ({ scope, toolSet } = {}) => commandGuidanceText(detectFileTools(ctx, scope, toolSet)),
     })
   } catch (error) {
     ctx.logger?.warn?.('context-guard: 注册命令使用提示失败: %s', error)
@@ -616,7 +656,7 @@ export function apply(ctx, config = {}) {
       }
     }
     if (cfg.commandLintEnabled && cfg.toolNames.includes(exec?.name)) {
-      const lint = lintCommand(command)
+      const lint = lintCommand(command, detectFileTools(ctx))
       if (lint.hit) {
         ctx.logger?.info?.('context-guard: 命令形态拦截 (%s): %s', cfg.commandLintMode, lint.reasons.map(reason => reason.code).join(', '))
         const verdict = lintDecision(lint, command, cfg.commandLintMode)

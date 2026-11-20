@@ -17,7 +17,7 @@ The plugin provides seven safeguards:
 2. **Deduplication** — identical results for the same session + tool + args within 10 minutes return a pointer to the previous call; changed results return a line-level diff.
 3. **Per-turn call gate** — the 80th bash call in a turn returns an `ask` reminder, shown as a yellow pending dot in the session list; the 160th and later calls are denied, and the Web client fills "继续" at that hard limit.
 4. **Per-turn output gate** — after more than 40 KB has entered the context in one turn, later results over 800 characters are reduced to a summary plus archive path.
-5. **Command-shape enforcement** — whole-file `cat`, unscoped recursive searches under the home directory, and bare `curl` API calls are denied by default with bounded alternatives (`read`/`grep`/`jq`); `ask` mode is configurable; system-prompt guidance is injected too.
+5. **Command-shape enforcement** — whole-file `cat`, unscoped recursive searches under the home directory, and bare `curl` API calls are denied by default with bounded alternatives; the file tool named in those alternatives follows the active toolset (dsh-ops `ops_inspect_local_file`/`ops_grep`/`ops_glob`, otherwise `read`/`grep`/`glob`), plus `jq`; `ask` mode is configurable; system-prompt guidance is injected too.
 6. **Read-only diagnostics** — `scripts/inspect.sh` replaces ad-hoc commands with fixed, bounded patterns.
 7. **Risk confirmation + compaction archive + metrics + cleanup** — confirms risky commands, writes `STATUS.md` around compaction, records savings, and prunes by retention period and quota.
 
@@ -77,9 +77,9 @@ Unbounded commands (`cat`, `journalctl` without `--since`/`-n`, `find /`, `du /`
 
 - Call gate: the 21st bash call in a turn returns one `ask` (not repeated in that turn); the 40th and later calls return `deny`. `turn/start` resets counters; if that event is missing, the plugin falls back to per-session counting and logs a warning. Gate messages show both the bash-call count for the turn and the current `session step`, which are different counters.
 - Output gate: after actual emitted context exceeds `maxTurnOutputChars=40000` in a turn, later results over `exhaustedOutputChars=800` are fully archived while the context receives at most 800 characters plus the path.
-- Command enforcement: `commandLintMode: deny` by default. Whole-file `cat` points to the `read` tool (or `sed -n '1,120p'`); unscoped recursive search points to `grep`/`glob` or `--glob '!**/node_modules/**'`; bare `curl .../api/...` points to `| jq '{field1,field2}'` or `-o /tmp/out.json` followed by a query.
-- DSH does not allow `tools/pre-execute` to rewrite tool arguments, so the plugin cannot silently turn `cat` into `read`; it denies the current call and puts the replacement in the model-visible `reason`, letting the model retry with a bounded call.
-- Complex shell workflows can set `commandLintMode: ask` to downgrade to confirmation; `commandGuidanceEnabled: true` also registers system-prompt guidance for `read`/`grep`/`jq`.
+- Command enforcement: `commandLintMode: deny` by default. Whole-file `cat` points to the active file-read tool (`ops_inspect_local_file({ path, offset, limit })` with dsh-ops, otherwise `read`) or `sed -n '1,120p'`; unscoped recursive search points to `ops_grep`/`grep` or `--glob '!**/node_modules/**'`; bare `curl .../api/...` points to `| jq '{field1,field2}'` or `-o /tmp/out.json` followed by a query.
+- DSH does not allow `tools/pre-execute` to rewrite tool arguments, so the plugin cannot silently turn `cat` into a file-read tool; it denies the current call and puts the replacement in the model-visible `reason`, letting the model retry with a bounded call.
+- Complex shell workflows can set `commandLintMode: ask` to downgrade to confirmation; `commandGuidanceEnabled: true` also registers system-prompt guidance for the file tools actually published (`ops_*` or `read`/`grep`/`glob`) and `jq`.
 - In `ask` mode a command-lint match and a risk match are merged into one `ask`; a lint `deny` or an existing `deny`/`cancel` wins.
 
 ## Reminders at 80 calls and auto-fill "continue" at the hard limit

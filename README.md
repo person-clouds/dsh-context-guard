@@ -17,7 +17,7 @@ DSH Host-only 插件：把长工具输出挡在上下文之外，同时保留完
 2. **去重**：同一 session + tool + args 在 10 分钟内结果相同，只回上一次 call 的指针；结果变化只回行级 diff；
 3. **单轮调用门禁**：单轮 bash 达到 `maxCallsPerTurn`（默认 80，即第 80 次）返回一次 `ask` 审批提醒，会话列表显示黄色待处理点；达到 `hardMaxCallsPerTurn`（默认 160）时拒绝并由 Web 自动填入「继续」；
 4. **单轮累计输出门禁**：本轮累计进入上下文超过 40KB 后，后续超过 800 字符的结果只回摘要 + 落盘路径；
-5. **命令形态拦截**：整文件 `cat`、无排除的家目录递归搜索、裸 `curl` API 默认 `deny` 并提示 `read`/`grep`/`jq` 等有界替代；可切 `ask`；同时注入系统提示引导；
+5. **命令形态拦截**：整文件 `cat`、无排除的家目录递归搜索、裸 `curl` API 默认 `deny` 并提示有界替代；替代命令里的文件工具按当前工具面渲染（dsh-ops 为 `ops_inspect_local_file`/`ops_grep`/`ops_glob`，官方为 `read`/`grep`/`glob`），另含 `jq`；可切 `ask`；同时注入系统提示引导；
 6. **只读诊断**：`scripts/inspect.sh` 用固定模式替代零散命令；
 7. **风险确认 + 压缩归档 + 指标 + 清理**：风险命令执行前确认；压缩前后写 `STATUS.md`，统计节省量，按保留期和配额清磁盘。
 
@@ -77,9 +77,9 @@ dsh --profile web --dump-config | grep -E "context-guard|maxOutputChars|tool-res
 
 - 调用门禁：同一轮 bash 每 80 次返回一次 `ask` 提醒（默认第 80 次），会话列表显示黄色 pending 点，审批浮窗可点继续或取消；第 160 次起 `deny`。监听 `session/event` 的 `turn/start` 清零；缺少该事件时退化为按 session 计数并记 warning。门禁文案同时显示“本轮 bash 调用次数”和当前 `session step`，两者不是同一口径。
 - 累计输出门禁：本轮实际进入上下文的字符数超过 `maxTurnOutputChars=40000` 后，后续超过 `exhaustedOutputChars=800` 的结果完整落盘，上下文只留 800 字符以内摘要 + 路径。
-- 命令拦截：默认 `commandLintMode: deny`。整文件 `cat` 提示改用 `read` 工具（或 `sed -n '1,120p'`）；无排除递归搜索提示改用 `grep`/`glob` 工具或加 `--glob '!**/node_modules/**'`；裸 `curl .../api/...` 提示改用 `| jq '{field1,field2}'` 或 `-o /tmp/out.json` 后再查询。
-- DSH 不支持在 `tools/pre-execute` 中改写工具参数，所以插件不会自动把 `cat` 替换成 `read`；它只拒绝当前调用，并在模型可见的 `reason` 中给出替代命令，由模型重新发起有界调用。
-- 复杂 shell 流程可设 `commandLintMode: ask` 降级为确认；`commandGuidanceEnabled: true` 会同时注册系统提示，引导模型优先使用 `read`/`grep`/`jq`。
+- 命令拦截：默认 `commandLintMode: deny`。整文件 `cat` 提示改用当前文件工具按段读（dsh-ops 的 `ops_inspect_local_file({ path, offset, limit })`，或官方 `read`）或 `sed -n '1,120p'`；无排除递归搜索提示改用 `ops_grep`/`grep` 或加 `--glob '!**/node_modules/**'`；裸 `curl .../api/...` 提示改用 `| jq '{field1,field2}'` 或 `-o /tmp/out.json` 后再查询。
+- DSH 不支持在 `tools/pre-execute` 中改写工具参数，所以插件不会自动把 `cat` 替换成文件读取工具；它只拒绝当前调用，并在模型可见的 `reason` 中给出替代命令，由模型重新发起有界调用。
+- 复杂 shell 流程可设 `commandLintMode: ask` 降级为确认；`commandGuidanceEnabled: true` 会同时注册系统提示，引导模型优先使用文件读取/搜索工具（`ops_*` 或官方 `read`/`grep`/`glob`，按实际工具面渲染）与 `jq`。
 - 命令 lint 为 `ask` 时与风险规则合并成一个 `ask`，不会一次调用弹两次；lint 为 `deny` 或已有 `deny`/`cancel` 时直接拒绝。
 
 写盘失败时回退原始结果，不丢证据。

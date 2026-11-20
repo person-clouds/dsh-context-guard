@@ -4,7 +4,7 @@ import { access, chmod, copyFile, mkdir, mkdtemp, readFile, readdir, utimes, wri
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import vm from 'node:vm'
-import { createRiskRuleHandler, name, apply, docGuardDecision, parseGitCommitCommand } from './index.js'
+import { createRiskRuleHandler, name, apply, docGuardDecision, parseGitCommitCommand, detectFileTools, commandGuidanceText } from './index.js'
 import { budgetFor, classifyCommand, renderBounded } from './lib/budget.js'
 import { lintCommand, lintDecision } from './lib/command-lint.js'
 import { TurnBudget } from './lib/turn-budget.js'
@@ -112,9 +112,30 @@ const ctx = {
 apply(ctx, { dir, outputDir, metricsDir: join(dir, 'metrics'), thresholdChars: 3000, cleanupEnabled: false })
 assert.equal(name, 'dsh-context-guard')
 assert.equal(commandGuidance.name, 'context-guard:command-guidance')
-assert.match(commandGuidance.text, /read 工具/)
-assert.match(commandGuidance.text, /grep\/glob/)
-assert.match(commandGuidance.text, /jq/)
+assert.equal(typeof commandGuidance.text, 'function')
+const fallbackGuidance = commandGuidance.text()
+assert.match(fallbackGuidance, /工具使用约束（context-guard）/)
+assert.match(fallbackGuidance, /ops_discover_tools/)
+assert.match(fallbackGuidance, /jq/)
+
+// 工具面自适应：装了 dsh-ops 提示 ops_*，只有官方工具时提示 read/grep/glob，两套都不在时提示先发现
+const fakeTools = names => ({ get: toolName => (names.includes(toolName) ? { name: toolName } : undefined) })
+const opsText = commandGuidanceText(detectFileTools({ tools: fakeTools(['ops_inspect_local_file', 'ops_grep', 'ops_glob', 'ops_discover_tools']) }))
+assert.match(opsText, /ops_inspect_local_file/)
+assert.match(opsText, /ops_grep/)
+assert.match(opsText, /ops_read_pdf/)
+assert.doesNotMatch(opsText, /read 工具/)
+const officialText = commandGuidanceText(detectFileTools({ tools: fakeTools(['read', 'grep', 'glob']) }))
+assert.match(officialText, /`read`/)
+assert.match(officialText, /`grep`/)
+assert.doesNotMatch(officialText, /ops_inspect_local_file/)
+assert.equal(detectFileTools({ tools: fakeTools([]) }), null)
+// 组装系统提示时按 scope/toolSet 视图判断，scoped 注册也能识别
+const scopedTools = { definitions: scope => (scope === 'agent-1' ? [{ name: 'ops_inspect_local_file' }, { name: 'ops_grep' }, { name: 'ops_glob' }] : []) }
+assert.match(commandGuidanceText(detectFileTools({ tools: scopedTools }, 'agent-1')), /ops_inspect_local_file/)
+assert.equal(detectFileTools({ tools: scopedTools }, 'agent-2'), null)
+const opsLint = lintCommand('cat app.log', { read: 'ops_inspect_local_file', grep: 'ops_grep' })
+assert.match(opsLint.reasons[0].alternative, /ops_inspect_local_file\(\{ path:/)
 
 // 单独的 ask 模式实例，用于验证复杂流程可降级为确认
 const askHandlers = new Map()
