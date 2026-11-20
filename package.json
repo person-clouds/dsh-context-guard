@@ -1,6 +1,6 @@
 {
   "name": "@fenghoer/dsh-context-guard",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "type": "module",
   "description": "DSH 插件：工具输出预算与落盘、重复结果去重、风险命令确认、只读诊断脚本、压缩归档与指标统计。",
   "exports": {
