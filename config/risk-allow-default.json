@@ -1,0 +1,152 @@
+{
+  "version": 1,
+  "hosts": {
+    "local": [
+      "localhost",
+      "127.0.0.1",
+      "[::1]"
+    ],
+    "codeHosting": [
+      "github.com",
+      "gitee.com",
+      "raw.githubusercontent.com",
+      "gitlab.com",
+      "github.blog"
+    ],
+    "api": [
+      "api.deepseek.com"
+    ],
+    "docs": [
+      "docs.romm.app"
+    ],
+    "techMedia": [
+      "news.ycombinator.com",
+      "www.ruanyifeng.com",
+      "sspai.com",
+      "www.infoq.cn",
+      "www.smashingmagazine.com",
+      "css-tricks.com",
+      "web.dev",
+      "alistapart.com",
+      "tympanus.net",
+      "www.producthunt.com",
+      "uxdesign.cc",
+      "www.nngroup.com",
+      "frontendfoc.us",
+      "javascriptweekly.com",
+      "react.statuscode.com",
+      "sidebar.io",
+      "www.designmilk.com",
+      "www.itsnicethat.com"
+    ]
+  },
+  "rm": {
+    "tempRoots": [
+      "/tmp",
+      "/var/tmp",
+      "$TMPDIR",
+      "${TMPDIR}"
+    ],
+    "homeOpt": true,
+    "testDirNames": [
+      "test",
+      "tests",
+      "__tests__"
+    ],
+    "testDirPatterns": [
+      "^test[-_.]",
+      "[-_.]test$",
+      "[.](?:test|spec)$"
+    ],
+    "artifactDirs": [
+      "node_modules",
+      "dist",
+      "build",
+      "coverage",
+      ".cache",
+      ".next",
+      ".nuxt",
+      ".output",
+      ".parcel-cache",
+      ".svelte-kit",
+      ".turbo",
+      ".vite",
+      ".nyc_output",
+      "__pycache__",
+      ".pytest_cache",
+      ".mypy_cache",
+      ".ruff_cache",
+      "target",
+      ".gradle",
+      "out",
+      "tmp",
+      "temp"
+    ]
+  },
+  "probes": {
+    "mktempRoots": [
+      "/tmp",
+      "/var/tmp",
+      "$TMPDIR",
+      "${TMPDIR}"
+    ],
+    "mktempTemplateMinX": 3,
+    "writeTestFilePattern": "(?:^|[._-])(?:dsh[._-]?)?write[._-]?test(?:$|[._-])",
+    "touchThenRm": true,
+    "mktempThenRm": true
+  },
+  "commands": {
+    "sudoReadOnly": [
+      "ls",
+      "stat",
+      "readlink",
+      "realpath",
+      "file",
+      "wc",
+      "head",
+      "tail",
+      "cat",
+      "grep",
+      "id",
+      "whoami",
+      "groups",
+      "pwd",
+      "uptime",
+      "uname",
+      "df",
+      "du",
+      "free",
+      "ps",
+      "netstat",
+      "journalctl",
+      "systemctl"
+    ],
+    "systemctlReadOnly": [
+      "status",
+      "show",
+      "is-active",
+      "is-enabled",
+      "is-failed",
+      "list-units",
+      "list-unit-files",
+      "list-timers",
+      "cat",
+      "help"
+    ]
+  },
+  "git": {
+    "readOnlySubcommands": [
+      "status",
+      "log",
+      "diff",
+      "show",
+      "rev-parse",
+      "ls-files",
+      "grep",
+      "blame",
+      "describe",
+      "shortlog"
+    ],
+    "policy": "只读子命令不触发风险；破坏形态仍由 risk.js 拦截，本组不参与放行匹配"
+  }
+}

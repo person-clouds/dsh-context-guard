@@ -1,7 +1,7 @@
 # STATUS — dsh-context-guard
 
 - 更新时间：2026-11-20
-- 一句话：DSH 工具输出预算/落盘、去重、单轮调用/输出门禁、硬上限后 Web 自动填入「继续」、命令形态拦截、风险确认与窄规则自动放行、只读诊断、压缩归档与指标。
+- 一句话：DSH 工具输出预算/落盘、去重、单轮调用/输出门禁、硬上限后 Web 自动填入「继续」、命令形态拦截、风险确认与窄规则自动放行、内置放行默认值外置、只读诊断、压缩归档与指标。
 - 位置：`dsh-context-guard/`；web profile 已按 link 加载并完成「始终允许」实机验证，superagent profile 待重启后核对。
 
 ## 已完成
@@ -33,6 +33,7 @@
 - [x] 命令形态拦截：整文件 `cat`、无排除的 `~/.dsh`/家目录递归搜索、裸 `curl` API 默认返回 `deny` 并给有界替代；替代命令与系统提示按当前工具面渲染文件工具（dsh-ops 的 `ops_inspect_local_file`/`ops_grep`/`ops_glob`，否则官方 `read`/`grep`/`glob`），另含 `jq`；可配 `commandLintMode: ask`；`ask` 模式下与风险规则合并为一次 `ask`；
 - [x] 文档提交门禁：`tools/pre-execute` 解析 `git commit` 目标仓，已登记仓库按中央策略运行 `scripts/check.sh --repo`，失败 `deny`；配置 `docGuardEnabled`/`docGuardWorkspaceRoot`/`docGuardTimeoutMs`；不自动改文件；
 - [x] `scripts/apply-profile.sh` 修复：检查 profile 已安装 scoped 包和失效的 `dsh-superagent` link；修正包名；删除顶层 `persistent-bash` 旧块，改为覆盖 minimal preset 的 `config.plugins` 并设 `maxOutputChars=65536`；`tool-result-pruner=6000/3000/1500`；重复执行幂等。
+- [x] 默认放行值外置：链接主机（`local`/`codeHosting`/`api`/`docs`/`techMedia` 五组 28 个）、`rm` 临时根与 test 目录、`~/opt` 开关、产物目录、写探测、`sudo`/`systemctl` 只读清单、git 只读子命令登记统一移入随包 `config/risk-allow-default.json`；`lib/default-allowlist.js` 负责读取、字段校验与规范化，配置缺失或非法时回退最小安全默认（仅 loopback 链接）并 warning；`DEFAULT_ALLOW_HOSTS` 与产物目录集合改由配置导出；`riskAllowHosts` 显式覆盖语义不变，用户 host 规则继续与内置并集；个人/内部域名不进内置。
 - [x] 中文 README 优先展示，补充英文 `README.en.md`；
 - [x] linuxops 可选安装方案：不安装自动回退、插件只读兼容层、通过 `--binary` 接入自建/上游二进制；安装脚本不 sudo、不自动改 PATH；
 
@@ -47,6 +48,7 @@
 | 5 | 重启 web/superagent 后验证 `--dump-config` 与 metrics | 需用户在宿主终端重启 DSH；同时实机验证「始终允许」原因弹窗、取消、规则 `reason` 标记 |
 | 6 | 用真实长输出验证 `maxOutputChars`、单轮门禁与落盘完整性 | 需重启 DSH |
 | 7 | 「始终允许」真实故障取证 | A 阶段已上线错误码提示；B 已补待放行项落盘与 `callId` 兜底（未取得真实故障原文，按最可能的 token 失效路径实现）；如再遇失败，记录提示/控制台原文以确认是否还有其它分支 |
+| 8 | 验证并发布默认放行配置外置 | 代码与文档已改；本会话 shell 不可用，需在 `/home/zh/www/dsh-context-guard` 跑 `npm test`、`npm pack --dry-run`（确认含 `config/risk-allow-default.json`），再在 `/home/zh/www` 跑 `./scripts/check.sh --repo dsh-context-guard`，通过后按 `PUBLISHING.md` 发布 |
 
 ## 验证记录
 
@@ -88,3 +90,6 @@
 | 2026-11-20 | `npm test`（「始终允许」原因） | ok；覆盖取消不提交、空原因留在弹窗提示、原因压成单行后提交、缺原因/纯空白 400 `reason-required` 且不消费 token、规则与 API 返回带 `reason`、同一规则原因覆盖、超长截到 200 字、`callId` 兜底带原因、重载后真实路由保存并放行 |
 | 2026-11-20 | `npm test`（待放行项落盘/`callId` 兜底） | ok；覆盖跨实例 token 复用、TTL 过期失效、无效 token + `callId` 兜底 200、`apply` 重载后旧 token 经真实路由保存并放行同类命令、客户端提交 `callId`、410/网络/缺 token 提示；实机生效需重启 DSH Host |
 | 2026-11-20 | `npm test`（命令提示跟随工具面） | ok；新增 `detectFileTools` 识别 `ops_*`/官方 `read`/两者皆无三种工具面，系统提示与 lint 替代命令按工具面渲染；实机生效需重启 DSH Host |
+| 2026-11-21 | `npm test`（默认放行配置外置） | ok；新增内置配置加载与分组断言（28 主机、22 产物目录、23 个 sudo 只读命令、10 个 systemctl 子命令、10 个 git 只读子命令）、Tailscale 域名不入内置、用户 host 规则与内置并集、缺配置与非法配置回退最小安全默认并告警 |
+| 2026-11-21 | `npm pack --dry-run` | 24 files，包含 `config/risk-allow-default.json` 与 `lib/default-allowlist.js` |
+| 2026-11-21 | `./scripts/check.sh --repo dsh-context-guard` | PASS（5 篇文档，0 项警告） |
