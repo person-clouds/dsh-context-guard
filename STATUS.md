@@ -28,6 +28,7 @@
 - [x] 单轮累计输出门禁：本轮 emitted 超过 40000 字符后，后续 >800 字符结果完整落盘，上下文只回 ≤800 字符摘要 + 路径；
 - [x] 风险审批「始终允许」：Host 按短期 token 取回原始命令并重新解析，保存到 `context-guard/risk-allow.json`；构建产物清理按「项目前缀 + 产物目录」类规则泛化（如确认 `rm -rf ./node_modules` 后同项目 `./dist` 也放行），未知链接仅保存主机，无法证明安全类时退化为精确命令哈希；`./src`、`..`、`sudo` 等仍询问，产物目录内尾部通配与 `find ... -delete` 按同类规则处理；默认开启，可用 `riskAutoAllowEnabled`/`riskRuleFile` 配置；
 - [x] 「始终允许」失败可见化：保存失败时页面右下角提示错误码与 HTTP 状态（如 `approval-rule-expired（HTTP 410）`）并写浏览器控制台；超过 2 秒先提示「仍在保存」、完成后提示结果，15 秒超时；失败不消耗审批，仍可「允许一次」；
+- [x] 「始终允许」填写原因：点击后先弹出原因输入框（必填、最多 200 字、压成单行），取消不保存也不消耗审批；原因随请求提交，Host 校验后再消费 token，缺原因返回 400 `reason-required`；原因作为规则标记 `reason` 写入 `risk-allow.json`，同一规则再次放行时覆盖为最新原因，`reason` 只用于复核、不参与匹配。
 - [x] 「始终允许」凭据失效修复：待放行项短期落盘为 `context-guard/risk-pending.json`（0600、TTL 10 分钟、最多 100 条），插件重载后同一 token 仍可消费；token 不在时按审批 `callId` 兜底，二者都没有才返回 410；落盘失败只 warning，不影响本次审批；规则仍只按安全类泛化。
 - [x] 命令形态拦截：整文件 `cat`、无排除的 `~/.dsh`/家目录递归搜索、裸 `curl` API 默认返回 `deny` 并给 `read`/`grep`/`jq` 等替代；可配 `commandLintMode: ask`；同时注册系统提示引导；`ask` 模式下与风险规则合并为一次 `ask`；
 - [x] 文档提交门禁：`tools/pre-execute` 解析 `git commit` 目标仓，已登记仓库按中央策略运行 `scripts/check.sh --repo`，失败 `deny`；配置 `docGuardEnabled`/`docGuardWorkspaceRoot`/`docGuardTimeoutMs`；不自动改文件；
@@ -43,7 +44,7 @@
 | 2 | ~~发布 npm `@fenghoer/dsh-context-guard@0.3.1`~~ | 已发布；`0.4.1` 已补发（npm latest 核对为 `0.4.1`） |
 | 3 | ~~提交 awesome-dsh-plugin 市场条目~~ | PR #15266 已合并；GitHub Release `v0.4.1` 已发布，市场 `latest` 链接自动更新 |
 | 4 | 宿主机安装插件并执行 `scripts/apply-profile.sh` | 沙箱对 `~/.dsh` 只读；需先执行 `dsh plugin --profile web add link:/home/zh/www/dsh-context-guard` 和 `dsh plugin --profile superagent add link:/home/zh/www/dsh-context-guard`，再跑迁移脚本 |
-| 5 | 重启 web/superagent 后验证 `--dump-config` 与 metrics | 需用户在宿主终端重启 DSH |
+| 5 | 重启 web/superagent 后验证 `--dump-config` 与 metrics | 需用户在宿主终端重启 DSH；同时实机验证「始终允许」原因弹窗、取消、规则 `reason` 标记 |
 | 6 | 用真实长输出验证 `maxOutputChars`、单轮门禁与落盘完整性 | 需重启 DSH |
 | 7 | 「始终允许」真实故障取证 | A 阶段已上线错误码提示；B 已补待放行项落盘与 `callId` 兜底（未取得真实故障原文，按最可能的 token 失效路径实现）；如再遇失败，记录提示/控制台原文以确认是否还有其它分支 |
 
@@ -84,4 +85,5 @@
 | 2026-11-20 | GitHub Release `v0.4.1` | 资产 `dsh-context-guard.tgz` 51055 字节，`latest/download` 返回 200 |
 | 2026-11-20 | `npm test`（「始终允许」失败可见化） | ok；覆盖 HTTP 410、网络错误、缺 token 三条失败路径的提示与抛错，失败时不误答审批 |
 | 2026-11-20 | Playwright 实机（web GUI） | 成功路径：新建会话→切「工作区内修改」→触发 `rm -f` 风险→点「始终允许」→POST 200、规则落盘、卡片关闭、命令执行；失败路径：拦截接口返回 410 时右下角提示 `approval-rule-expired（HTTP 410）` 且审批卡保持可回答；默认「完全权限」preset 为 `approval: never`，不会弹审批 |
+| 2026-11-20 | `npm test`（「始终允许」原因） | ok；覆盖取消不提交、空原因留在弹窗提示、原因压成单行后提交、缺原因/纯空白 400 `reason-required` 且不消费 token、规则与 API 返回带 `reason`、同一规则原因覆盖、超长截到 200 字、`callId` 兜底带原因、重载后真实路由保存并放行 |
 | 2026-11-20 | `npm test`（待放行项落盘/`callId` 兜底） | ok；覆盖跨实例 token 复用、TTL 过期失效、无效 token + `callId` 兜底 200、`apply` 重载后旧 token 经真实路由保存并放行同类命令、客户端提交 `callId`、410/网络/缺 token 提示；实机生效需重启 DSH Host |

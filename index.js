@@ -17,7 +17,7 @@ import { DEFAULT_DEDUPE_MIN_CHARS, DedupCache, dedupKey, diffLines } from './lib
 import { MetricsRecorder, metricOf } from './lib/metrics.js'
 import { cleanupOutputs } from './lib/cleanup.js'
 import { analyzeCommand, riskAskDecision } from './lib/risk.js'
-import { PendingRiskRules, RISK_RULE_ENDPOINT, RiskRuleStore, filterRiskByRules, ruleSpecsFor } from './lib/risk-allow.js'
+import { PendingRiskRules, RISK_RULE_ENDPOINT, RiskRuleStore, filterRiskByRules, normalizeRuleReason, ruleSpecsFor } from './lib/risk-allow.js'
 import { lintCommand, lintDecision } from './lib/command-lint.js'
 import { TurnBudget } from './lib/turn-budget.js'
 import { HARD_LIMIT_DRAFT_MARKER } from './lib/continue-draft.js'
@@ -478,6 +478,12 @@ export function createRiskRuleHandler({ store, pending, riskAllowHosts, logger }
       try {
         const parsed = JSON.parse(body)
         if (parsed?.action === 'allow') {
+          // 原因先校验再消费 token：缺原因时用户仍可重试，不浪费待放行项。
+          const reason = normalizeRuleReason(parsed.reason)
+          if (!reason) {
+            sendJson(res, 400, { ok: false, error: 'reason-required' })
+            return
+          }
           await pending.load()
           const entry = pending.take(parsed.token) || pending.takeByCallId(parsed.callId)
           if (!entry) {
@@ -489,7 +495,7 @@ export function createRiskRuleHandler({ store, pending, riskAllowHosts, logger }
             sendJson(res, 409, { ok: false, error: 'command-no-longer-risky' })
             return
           }
-          const specs = ruleSpecsFor(entry.command, risk)
+          const specs = ruleSpecsFor(entry.command, risk).map(spec => ({ ...spec, reason }))
           if (specs.length === 0) {
             sendJson(res, 400, { ok: false, error: 'no-rule-parsed' })
             return

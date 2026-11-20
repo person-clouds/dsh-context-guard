@@ -17,6 +17,8 @@ window.__ModuleLoader__.load({
     const SLOW_NOTICE_MS = 2000
     const REQUEST_TIMEOUT_MS = 15000
     const NOTICE_ID = 'context-guard-notice'
+    const REASON_DIALOG_ID = 'context-guard-reason-dialog'
+    const REASON_MAX = 200
     const budgets = new Map()
     let pluginCtx
 
@@ -100,9 +102,9 @@ window.__ModuleLoader__.load({
     function riskDescription() {
       const language = String(globalThis.navigator?.language || '').toLowerCase()
       if (language.startsWith('zh')) {
-        return '点击「始终允许」会把命令解析成安全类规则：同一项目前缀下清理构建产物（node_modules、dist、build、.cache 等）会自动放行；未知链接只放行该主机；无法证明为安全类时只记住完全相同的命令。不会按高风险代码全量放行。'
+        return '点击「始终允许」会先要求填写放行原因，并把原因作为规则标记保存；随后把命令解析成安全类规则：同一项目前缀下清理构建产物（node_modules、dist、build、.cache 等）会自动放行；未知链接只放行该主机；无法证明为安全类时只记住完全相同的命令。不会按高风险代码全量放行。'
       }
-      return '“Always allow” parses the command into a safe-class rule: cleaning build artifacts (node_modules, dist, build, .cache, …) under the same project prefix is auto-allowed; unknown links allow only that host; when no safe class can be proven, only the exact command is remembered. High-risk codes are never wildcarded.'
+      return '“Always allow” first asks for a reason and stores it as the rule label; it then parses the command into a safe-class rule: cleaning build artifacts (node_modules, dist, build, .cache, …) under the same project prefix is auto-allowed; unknown links allow only that host; when no safe class can be proven, only the exact command is remembered. High-risk codes are never wildcarded.'
     }
 
     function showNotice(text) {
@@ -126,6 +128,86 @@ window.__ModuleLoader__.load({
         : undefined
     }
 
+    /** 「始终允许」前询问放行原因；取消/关闭返回 null。 */
+    function askRiskReason() {
+      const doc = globalThis.document
+      if (!doc?.body || typeof doc.createElement !== 'function') return Promise.resolve(null)
+      if (doc.getElementById?.(REASON_DIALOG_ID)) return Promise.resolve(null)
+      return new Promise(resolve => {
+        const mask = doc.createElement('div')
+        mask.id = REASON_DIALOG_ID
+        mask.setAttribute('role', 'dialog')
+        mask.setAttribute('aria-modal', 'true')
+        mask.setAttribute('aria-label', '填写放行原因')
+        mask.style.cssText = 'position:fixed;inset:0;z-index:2147483001;display:flex;align-items:center;justify-content:center;background:rgba(15,23,42,.55)'
+        const panel = doc.createElement('div')
+        panel.style.cssText = 'width:min(440px,92vw);box-sizing:border-box;padding:18px 20px;border-radius:12px;background:#111827;color:#f9fafb;font-size:13px;line-height:1.5;box-shadow:0 12px 40px rgba(0,0,0,.45)'
+        const title = doc.createElement('div')
+        title.textContent = '填写放行原因'
+        title.style.cssText = 'font-size:15px;font-weight:600;margin-bottom:6px'
+        const help = doc.createElement('div')
+        help.textContent = '原因会作为规则标记保存到 risk-allow.json，便于以后复核这条「始终允许」。'
+        help.style.cssText = 'color:#9ca3af;margin-bottom:12px'
+        const input = doc.createElement('input')
+        input.type = 'text'
+        input.maxLength = REASON_MAX
+        input.placeholder = '例如：清理构建产物，准备重新打包'
+        input.setAttribute('aria-label', '放行原因（必填）')
+        input.style.cssText = 'width:100%;box-sizing:border-box;padding:8px 10px;border-radius:8px;border:1px solid #374151;background:#0b1220;color:#f9fafb;font-size:13px;outline:none'
+        const hint = doc.createElement('div')
+        hint.textContent = `必填，最多 ${REASON_MAX} 字`
+        hint.style.cssText = 'color:#9ca3af;margin:6px 0 14px'
+        const actions = doc.createElement('div')
+        actions.style.cssText = 'display:flex;justify-content:flex-end;gap:10px'
+        const cancel = doc.createElement('button')
+        cancel.type = 'button'
+        cancel.textContent = '取消'
+        cancel.style.cssText = 'padding:7px 14px;border-radius:8px;border:1px solid #374151;background:transparent;color:#e5e7eb;cursor:pointer;font-size:13px'
+        const save = doc.createElement('button')
+        save.type = 'button'
+        save.textContent = '保存并允许'
+        save.style.cssText = 'padding:7px 14px;border-radius:8px;border:0;background:#2563eb;color:#fff;cursor:pointer;font-size:13px;font-weight:600'
+        let settled = false
+        const finish = (value) => {
+          if (settled) return
+          settled = true
+          if (typeof mask.remove === 'function') mask.remove()
+          else mask.parentNode?.removeChild?.(mask)
+          resolve(value)
+        }
+        const submit = () => {
+          const text = String(input.value || '').replace(/\s+/g, ' ').trim()
+          if (!text) {
+            hint.textContent = '请填写原因后再允许'
+            hint.style.color = '#fca5a5'
+            input.focus?.()
+            return
+          }
+          finish(text.slice(0, REASON_MAX))
+        }
+        cancel.addEventListener('click', () => finish(null))
+        save.addEventListener('click', submit)
+        input.addEventListener('keydown', event => {
+          if (event?.key === 'Enter') {
+            event.preventDefault?.()
+            submit()
+          } else if (event?.key === 'Escape') {
+            finish(null)
+          }
+        })
+        panel.appendChild(title)
+        panel.appendChild(help)
+        panel.appendChild(input)
+        panel.appendChild(hint)
+        panel.appendChild(actions)
+        actions.appendChild(cancel)
+        actions.appendChild(save)
+        mask.appendChild(panel)
+        doc.body.appendChild(mask)
+        input.focus?.()
+      })
+    }
+
     /** 失败必须可见：提示 + 控制台，错误码用于定位 Host 侧原因。 */
     function riskRuleFailure(message) {
       const text = `「始终允许」失败：${message}`
@@ -134,7 +216,7 @@ window.__ModuleLoader__.load({
       return new Error(text)
     }
 
-    async function saveRiskRuleAndAllow(approval) {
+    async function saveRiskRuleAndAllow(approval, reason) {
       const token = riskRuleToken(approval.reason)
       if (!token) throw riskRuleFailure('审批信息里缺少放行 token，请重新触发风险命令后再试')
       const startedAt = Date.now()
@@ -157,6 +239,7 @@ window.__ModuleLoader__.load({
           body: JSON.stringify({
             action: 'allow',
             token,
+            reason,
             ...(approval.callId === undefined ? {} : { callId: approval.callId }),
           }),
           ...(controller ? { signal: controller.signal } : {}),
@@ -194,7 +277,11 @@ window.__ModuleLoader__.load({
         allowLabel: props.t('allowOnce'),
         onAllow: () => approval.answer('allowed-once'),
         onReject: () => approval.answer('rejected'),
-        onAlways: () => saveRiskRuleAndAllow(approval),
+        onAlways: async () => {
+          const reason = await askRiskReason()
+          if (reason === null) return
+          await saveRiskRuleAndAllow(approval, reason)
+        },
       })
     }
 

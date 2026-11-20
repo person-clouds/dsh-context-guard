@@ -317,16 +317,40 @@ const postRiskRuleWith = (handler, body) => new Promise(resolve => {
   handler(req, res)
 })
 const postRiskRule = (body) => postRiskRuleWith(handler, body)
-const routeResult = await postRiskRule({ action: 'allow', token: routeToken })
+
+// 原因先校验再消费 token：缺原因/纯空白返回 400，且待放行项仍可重试
+const missingReasonToken = pendingRules.add(riskyCommand, analyzeCommand(riskyCommand))
+const missingReason = await postRiskRule({ action: 'allow', token: missingReasonToken })
+assert.equal(missingReason.status, 400)
+assert.equal(missingReason.body.error, 'reason-required')
+const blankReason = await postRiskRule({ action: 'allow', token: 'deadbeefdeadbeefdeadbeef', reason: '   ' })
+assert.equal(blankReason.status, 400)
+assert.equal(blankReason.body.error, 'reason-required')
+assert.equal((await pendingRules.take(missingReasonToken))?.command, riskyCommand)
+
+const routeResult = await postRiskRule({ action: 'allow', token: routeToken, reason: '清理生成的临时数据' })
 assert.equal(routeResult.status, 200)
 assert.equal(routeResult.body.ok, true)
+assert.equal(routeResult.body.rules[0].reason, '清理生成的临时数据')
+assert.equal((await routeStore.list())[0].reason, '清理生成的临时数据')
 assert.equal(await pendingRules.take(routeToken), null)
+
+// 同一规则再次放行时，原因覆盖为最新标记；超长原因截到 200 字
+const reallowToken = pendingRules.add(riskyCommand, analyzeCommand(riskyCommand))
+const reallow = await postRiskRule({ action: 'allow', token: reallowToken, reason: '  重新打包前\n清理  临时数据  ' })
+assert.equal(reallow.status, 200)
+assert.equal(reallow.body.rules[0].reason, '重新打包前 清理 临时数据')
+const longReasonToken = pendingRules.add(riskyCommand, analyzeCommand(riskyCommand))
+const longReason = await postRiskRule({ action: 'allow', token: longReasonToken, reason: 'x'.repeat(300) })
+assert.equal(longReason.status, 200)
+assert.equal(longReason.body.rules[0].reason.length, 200)
 
 // token 失效时按审批 callId 兜底取回同一待放行项
 pendingRules.add(riskyCommand, analyzeCommand(riskyCommand), 'call-route-fallback')
-const fallbackResult = await postRiskRule({ action: 'allow', token: 'deadbeefdeadbeefdeadbeef', callId: 'call-route-fallback' })
+const fallbackResult = await postRiskRule({ action: 'allow', token: 'deadbeefdeadbeefdeadbeef', callId: 'call-route-fallback', reason: '兜底重试' })
 assert.equal(fallbackResult.status, 200)
 assert.equal(fallbackResult.body.ok, true)
+assert.equal(fallbackResult.body.rules[0].reason, '兜底重试')
 assert.equal(await pendingRules.takeByCallId('call-route-fallback'), null)
 
 // 待放行项短期落盘：插件重载后 token 仍可消费，过期后失效
@@ -413,9 +437,10 @@ assert.match(reloadPersisted, new RegExp(reloadToken))
 const secondMount = mountApply()
 const reloadRoute = secondMount.routes.find(route => route.path === '/api/context-guard-risk-rule')
 assert.ok(reloadRoute)
-const reloadSaved = await postRiskRuleWith(reloadRoute.handler, { action: 'allow', token: reloadToken, callId: 'call-reload-2' })
+const reloadSaved = await postRiskRuleWith(reloadRoute.handler, { action: 'allow', token: reloadToken, callId: 'call-reload-2', reason: '重新打包前清理覆盖率产物' })
 assert.equal(reloadSaved.status, 200)
 assert.equal(reloadSaved.body.ok, true)
+assert.equal(reloadSaved.body.rules[0].reason, '重新打包前清理覆盖率产物')
 const reloadAllowed = await secondMount.handlers.get('tools/pre-execute')[0](
   { name: 'bash', callId: 'call-reload-3', arguments: { command: 'rm -rf ./coverage' }, agent: { id: 'session-reload' } },
   async () => ({ kind: 'allow' }),
@@ -678,6 +703,68 @@ assert.equal(docAllowed, null)
 // Web 客户端：真实 tool/result 形状（message.content + isError）应写入「继续」，同 turn 只写一次
 {
   const clientSource = await readFile(new URL('./client.js', import.meta.url), 'utf8')
+
+  // 极简 DOM：只实现「始终允许」原因弹窗与右下角提示用到的接口
+  function makeFakeNode(tag) {
+    const node = {
+      tagName: String(tag).toUpperCase(),
+      style: {},
+      children: [],
+      parentNode: null,
+      attributes: {},
+      handlers: {},
+      id: '',
+      textContent: '',
+      value: '',
+      appendChild(child) { child.parentNode = node; node.children.push(child); return child },
+      removeChild(child) {
+        const index = node.children.indexOf(child)
+        if (index >= 0) node.children.splice(index, 1)
+        child.parentNode = null
+        return child
+      },
+      remove() { if (node.parentNode) node.parentNode.removeChild(node) },
+      setAttribute(name, value) { node.attributes[name] = String(value) },
+      addEventListener(type, fn) { (node.handlers[type] = node.handlers[type] || []).push(fn) },
+      removeEventListener(type, fn) {
+        const list = node.handlers[type] || []
+        const index = list.indexOf(fn)
+        if (index >= 0) list.splice(index, 1)
+      },
+      focus() { node.focused = true },
+    }
+    return node
+  }
+  function findNode(root, predicate) {
+    if (predicate(root)) return root
+    for (const child of root.children) {
+      const hit = findNode(child, predicate)
+      if (hit) return hit
+    }
+    return null
+  }
+  function clickNode(node) {
+    for (const fn of [...(node.handlers.click || [])]) fn({})
+  }
+  function clickText(root, text) {
+    const node = findNode(root, n => n.textContent === text && (n.handlers.click || []).length > 0)
+    assert.ok(node, `找不到按钮：${text}`)
+    clickNode(node)
+  }
+  function submitReason(doc, text) {
+    const input = findNode(doc.body, n => n.tagName === 'INPUT')
+    assert.ok(input, '原因弹窗里没有输入框')
+    input.value = text
+    clickText(doc.body, '保存并允许')
+  }
+  function makeFakeDocument() {
+    const body = makeFakeNode('body')
+    return {
+      body,
+      createElement: tag => makeFakeNode(tag),
+      getElementById(id) { return findNode(body, n => n.id === id) },
+    }
+  }
   const entry = {
     type: 'event',
     event: {
@@ -709,11 +796,12 @@ assert.equal(docAllowed, null)
   }
   const React = { useRef: (value) => ({ current: value }), useEffect: (fn) => { fn() } }
   const win = { __ModuleLoader__: { load(m) { plugin = m.factory((id) => id === 'react' ? React : undefined) } } }
+  const docSuccess = makeFakeDocument()
   const fetch = async (url, options) => {
     ruleCalls.push({ url, body: JSON.parse(options.body) })
     return { ok: true, status: 200, json: async () => ({ ok: true }) }
   }
-  vm.runInNewContext(clientSource, { window: win, console, fetch, navigator: { language: 'zh-CN' } })
+  vm.runInNewContext(clientSource, { window: win, console, fetch, document: docSuccess, navigator: { language: 'zh-CN' } })
   plugin.apply(ctx)
   registered['conversation.input.dock'].Component({
     sessionId: 'session-test',
@@ -744,9 +832,23 @@ assert.equal(docAllowed, null)
   assert.match(rendered.input.description, /始终允许/)
   assert.equal(rendered.input.allowLabel, '仅允许本次')
   assert.equal(typeof rendered.input.onAlways, 'function')
-  await rendered.input.onAlways()
-  assert.deepEqual(ruleCalls, [{ url: '/api/context-guard-risk-rule', body: { action: 'allow', token: '0123456789abcdef01234567', callId: 'call-risk-1' } }])
+  // 取消不保存、不消耗审批
+  const cancelled = rendered.input.onAlways()
+  clickText(docSuccess.body, '取消')
+  await cancelled
+  assert.equal(ruleCalls.length, 0)
+  assert.deepEqual(answers, [])
+  // 原因为空时留在弹窗里提示；填写后才提交，空白会压成单行
+  const alwaysPromise = rendered.input.onAlways()
+  assert.ok(docSuccess.getElementById('context-guard-reason-dialog'))
+  clickText(docSuccess.body, '保存并允许')
+  assert.ok(docSuccess.getElementById('context-guard-reason-dialog'))
+  assert.ok(findNode(docSuccess.body, n => n.textContent === '请填写原因后再允许'))
+  submitReason(docSuccess, '  清理构建产物\n准备重新打包  ')
+  await alwaysPromise
+  assert.deepEqual(ruleCalls, [{ url: '/api/context-guard-risk-rule', body: { action: 'allow', token: '0123456789abcdef01234567', reason: '清理构建产物 准备重新打包', callId: 'call-risk-1' } }])
   assert.deepEqual(answers, ['allowed-once'])
+  assert.equal(docSuccess.getElementById('context-guard-reason-dialog'), null)
   // 非本插件风险审批交给内置审批面板
   assert.equal(registered['conversation.composer'].select({ pendingInteraction: { kind: 'approval', reason: 'other' } }), null)
 
@@ -755,10 +857,11 @@ assert.equal(docAllowed, null)
     const registered2 = {}
     let plugin2
     const notices = []
-    const doc = {
-      body: { appendChild(node) { notices.push(node) } },
-      getElementById: () => null,
-      createElement: () => ({ style: {}, setAttribute() {}, textContent: '' }),
+    const doc = makeFakeDocument()
+    const appendChild = doc.body.appendChild
+    doc.body.appendChild = (node) => {
+      if (node.id === 'context-guard-notice') notices.push(node)
+      return appendChild(node)
     }
     const win2 = { __ModuleLoader__: { load: (m) => { plugin2 = m.factory((id) => id === 'react' ? React : undefined) } } }
     vm.runInNewContext(clientSource, {
@@ -769,7 +872,7 @@ assert.equal(docAllowed, null)
       sessions: { binding: () => null },
       slots: { inject(name, fn) { registered2[name] = fn() }, register(opts, Component) { return { ...opts, Component } } },
     })
-    return { registered: registered2, notices }
+    return { registered: registered2, notices, doc }
   }
   const tokenReason = 'context-guard risk check (high): destructive-rm; command: rm -rf ./dist; rule-token: 0123456789abcdef01234567'
   const makeApproval = (reason, seen) => ({
@@ -796,7 +899,9 @@ assert.equal(docAllowed, null)
       t: (key) => key,
       renderFactorySlot: (name, input) => ({ name, input }),
     })
-    await assert.rejects(() => rendered2.input.onAlways(), item.pattern)
+    const always = rendered2.input.onAlways()
+    submitReason(mounted.doc, '测试原因')
+    await assert.rejects(() => always, item.pattern)
     assert.equal(seen.length, 0)
     assert.match(mounted.notices.at(-1).textContent, /「始终允许」失败/)
     assert.match(mounted.notices.at(-1).textContent, item.name === '410' ? /approval-rule-expired/ : /Failed to fetch/)
@@ -810,7 +915,9 @@ assert.equal(docAllowed, null)
       t: (key) => key,
       renderFactorySlot: (name, input) => ({ name, input }),
     })
-    await assert.rejects(() => rendered2.input.onAlways(), /缺少放行 token/)
+    const always = rendered2.input.onAlways()
+    submitReason(mounted.doc, '测试原因')
+    await assert.rejects(() => always, /缺少放行 token/)
     assert.equal(calls, 0)
     assert.match(mounted.notices.at(-1).textContent, /「始终允许」失败/)
   }
