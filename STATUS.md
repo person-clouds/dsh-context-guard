@@ -38,7 +38,7 @@
 | # | 事项 | 说明 |
 |---|---|---|
 | 1 | ~~创建公开 GitHub 仓库 `person-clouds/dsh-context-guard`~~ | 已创建：https://github.com/person-clouds/dsh-context-guard |
-| 2 | ~~发布 npm `@fenghoer/dsh-context-guard@0.3.1`~~ | 已发布；`0.4.1` 待 2FA 放行后补发（OTP 或 Bypass 2FA token） |
+| 2 | ~~发布 npm `@fenghoer/dsh-context-guard@0.3.1`~~ | 已发布；`0.4.1` 已补发（npm latest 核对为 `0.4.1`） |
 | 3 | ~~提交 awesome-dsh-plugin 市场条目~~ | PR #15266 已合并；GitHub Release `v0.4.1` 已发布，市场 `latest` 链接自动更新 |
 | 4 | 宿主机安装插件并执行 `scripts/apply-profile.sh` | 沙箱对 `~/.dsh` 只读；需先执行 `dsh plugin --profile web add link:/home/zh/www/dsh-context-guard` 和 `dsh plugin --profile superagent add link:/home/zh/www/dsh-context-guard`，再跑迁移脚本 |
 | 5 | 重启 web/superagent 后验证 `--dump-config` 与 metrics | 需用户在宿主终端重启 DSH |
@@ -77,5 +77,5 @@
 | 2026-11-19 | `npm test`（`~/opt` rm 白名单） | ok；`~/opt`、`$HOME/opt`、`/home/zh/opt` 下逐个列出的具体路径放行；目录本身、`/tmp/*`、`~/opt/*`、`..`、`sudo`、混合非白名单目标仍拦截 |
 | 2026-11-20 | 提醒/硬上限放宽 | 单轮 bash 第 80 次返回一次 `ask`（黄色 pending 点）；第 160 次 deny + marker 并自动填「继续」；`maxCallsPerTurn=80`/`hardMaxCallsPerTurn=160` 同步到代码默认值、profile 模板、`apply-profile.sh`（含 20/80 → 80/160 迁移）与 web/superagent profile；`npm test` ok |
 | 2026-11-20 | `npm test` | ok（0.4.1 发布前回归） |
-| 2026-11-20 | npm publish `0.4.1` | 失败：E403，需 OTP 或 Bypass 2FA token；`npm whoami` 已通过 |
+| 2026-11-20 | npm publish `0.4.1` | ok（曾因 token/IP 报 403、404；用户更新 token 后发布成功，`npm view` 为 `0.4.1`） |
 | 2026-11-20 | GitHub Release `v0.4.1` | 资产 `dsh-context-guard.tgz` 51055 字节，`latest/download` 返回 200 |
