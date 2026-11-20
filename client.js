@@ -154,7 +154,11 @@ window.__ModuleLoader__.load({
         response = await fetch(RISK_RULE_ENDPOINT, {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ action: 'allow', token }),
+          body: JSON.stringify({
+            action: 'allow',
+            token,
+            ...(approval.callId === undefined ? {} : { callId: approval.callId }),
+          }),
           ...(controller ? { signal: controller.signal } : {}),
         })
       } catch (error) {
@@ -169,7 +173,7 @@ window.__ModuleLoader__.load({
       const body = typeof response.json === 'function' ? await response.json().catch(() => null) : null
       if (!response.ok || body?.ok !== true) {
         const detail = body?.error || 'unknown-error'
-        const hint = detail === 'approval-rule-expired' ? '；审批已超过 10 分钟或 Host 重启过，请重新触发命令' : ''
+        const hint = detail === 'approval-rule-expired' ? '；审批 token 已超过 10 分钟有效期，请重新触发命令' : ''
         throw riskRuleFailure(`${detail}（HTTP ${response.status}）${hint}`)
       }
       if (slow) {

@@ -8,7 +8,7 @@
 
 import { execFile } from 'node:child_process'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
-import { basename, isAbsolute, join, resolve, sep } from 'node:path'
+import { basename, dirname, isAbsolute, join, resolve, sep } from 'node:path'
 import { promisify } from 'node:util'
 import { commandOf, dshHome, hashText, safeName, sessionIdOf, textOf as contentText } from './lib/common.js'
 import { budgetFor, classifyCommand, renderBounded } from './lib/budget.js'
@@ -478,7 +478,8 @@ export function createRiskRuleHandler({ store, pending, riskAllowHosts, logger }
       try {
         const parsed = JSON.parse(body)
         if (parsed?.action === 'allow') {
-          const entry = pending.take(parsed.token)
+          await pending.load()
+          const entry = pending.take(parsed.token) || pending.takeByCallId(parsed.callId)
           if (!entry) {
             sendJson(res, 410, { ok: false, error: 'approval-rule-expired' })
             return
@@ -516,9 +517,13 @@ export function apply(ctx, config = {}) {
   const dir = typeof config.dir === 'string' && config.dir ? config.dir : undefined
   const cfg = guardConfig(config)
   const riskRuleStore = new RiskRuleStore(cfg.riskRuleFile)
-  const pendingRiskRules = new PendingRiskRules()
+  const pendingRiskRules = new PendingRiskRules({
+    file: join(dirname(cfg.riskRuleFile), 'risk-pending.json'),
+    onError: error => ctx.logger?.warn?.('context-guard: 待放行项读写失败（不影响本次审批）: %s', error),
+  })
   if (cfg.riskAutoAllowEnabled) {
     void riskRuleStore.load().catch(error => ctx.logger?.warn?.('context-guard: 加载风险规则失败: %s', error))
+    void pendingRiskRules.load().catch(error => ctx.logger?.warn?.('context-guard: 加载待放行项失败: %s', error))
     if (typeof ctx.inject === 'function') {
       ctx.inject(['webServer'], routeCtx => {
         routeCtx.effect(() => routeCtx.webServer.register({
@@ -598,7 +603,7 @@ export function apply(ctx, config = {}) {
         ctx.logger?.info?.('context-guard: 风险命令待确认 (%s): %s', risk.level, risk.preview)
         const ask = riskAskDecision(risk)
         if (cfg.riskAutoAllowEnabled) {
-          const token = pendingRiskRules.add(command, risk)
+          const token = pendingRiskRules.add(command, risk, exec?.callId)
           ask.reason = `${ask.reason}; rule-token: ${token}`
         }
         asks.push(ask)

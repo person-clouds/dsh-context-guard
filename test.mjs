@@ -300,11 +300,11 @@ const routeStore = new RiskRuleStore(join(ruleDir, 'route-rules.json'))
 const pendingRules = new PendingRiskRules()
 const routeToken = pendingRules.add(riskyCommand, analyzeCommand(riskyCommand))
 const handler = createRiskRuleHandler({ store: routeStore, pending: pendingRules, riskAllowHosts: undefined, logger: { warn() {} } })
-const routeResult = await new Promise(resolve => {
+const postRiskRuleWith = (handler, body) => new Promise(resolve => {
   const req = {
     method: 'POST',
     on(event, fn) {
-      if (event === 'data') fn(Buffer.from(JSON.stringify({ action: 'allow', token: routeToken })))
+      if (event === 'data') fn(Buffer.from(JSON.stringify(body)))
       if (event === 'end') fn()
     },
   }
@@ -316,9 +316,38 @@ const routeResult = await new Promise(resolve => {
   }
   handler(req, res)
 })
+const postRiskRule = (body) => postRiskRuleWith(handler, body)
+const routeResult = await postRiskRule({ action: 'allow', token: routeToken })
 assert.equal(routeResult.status, 200)
 assert.equal(routeResult.body.ok, true)
 assert.equal(await pendingRules.take(routeToken), null)
+
+// token 失效时按审批 callId 兜底取回同一待放行项
+pendingRules.add(riskyCommand, analyzeCommand(riskyCommand), 'call-route-fallback')
+const fallbackResult = await postRiskRule({ action: 'allow', token: 'deadbeefdeadbeefdeadbeef', callId: 'call-route-fallback' })
+assert.equal(fallbackResult.status, 200)
+assert.equal(fallbackResult.body.ok, true)
+assert.equal(await pendingRules.takeByCallId('call-route-fallback'), null)
+
+// 待放行项短期落盘：插件重载后 token 仍可消费，过期后失效
+const pendingFile = join(ruleDir, 'pending.json')
+const pendingFirst = new PendingRiskRules({ file: pendingFile })
+const persistedToken = pendingFirst.add('rm -rf ./dist', analyzeCommand('rm -rf ./dist'), 'call-persisted-1')
+await pendingFirst.load()
+await pendingFirst.persist()
+const pendingReloaded = new PendingRiskRules({ file: pendingFile })
+await pendingReloaded.load()
+assert.equal((await pendingReloaded.take(persistedToken))?.callId, 'call-persisted-1')
+let pendingClock = 1000
+const ttlFile = join(ruleDir, 'pending-ttl.json')
+const pendingTtl = new PendingRiskRules({ file: ttlFile, ttlMs: 1000, now: () => pendingClock })
+const ttlToken = pendingTtl.add('rm -rf ./build', analyzeCommand('rm -rf ./build'))
+await pendingTtl.load()
+await pendingTtl.persist()
+pendingClock += 2000
+const pendingExpired = new PendingRiskRules({ file: ttlFile, ttlMs: 1000, now: () => pendingClock })
+await pendingExpired.load()
+assert.equal(await pendingExpired.take(ttlToken), null)
 
 // pre-execute 使用同一规则文件：同类构建产物清理自动放行，非产物目录仍 ask
 const autoRuleFile = join(ruleDir, 'auto-rules.json')
@@ -338,6 +367,60 @@ assert.equal(autoAllowed.kind, 'allow')
 const autoAsked = await autoPre({ name: 'bash', callId: 'call-auto-2', arguments: { command: 'rm -rf ./src' }, agent: { id: 'session-auto' } }, async () => ({ kind: 'allow' }))
 assert.equal(autoAsked.kind, 'ask')
 assert.match(autoAsked.reason, /rule-token:/)
+
+// 插件重载集成：第一个实例落盘的待放行项，第二个实例的 HTTP 路由仍可消费
+const reloadDir = join(ruleDir, 'reload')
+const reloadCfg = {
+  dir,
+  outputDir: join(dir, 'reload-output'),
+  metricsDir: join(dir, 'reload-metrics'),
+  thresholdChars: 3000,
+  cleanupEnabled: false,
+  riskRuleFile: join(reloadDir, 'risk-allow.json'),
+}
+const mountApply = () => {
+  const handlers = new Map()
+  const routes = []
+  apply({
+    on(type, fn) {
+      if (!handlers.has(type)) handlers.set(type, [])
+      handlers.get(type).push(fn)
+    },
+    logger: { warn() {} },
+    inject(names, fn) {
+      fn({ effect: (register) => register(), webServer: { register: (route) => routes.push(route) } })
+    },
+  }, reloadCfg)
+  return { handlers, routes }
+}
+const firstMount = mountApply()
+const reloadAsked = await firstMount.handlers.get('tools/pre-execute')[0](
+  { name: 'bash', callId: 'call-reload-2', arguments: { command: 'rm -rf ./coverage' }, agent: { id: 'session-reload' } },
+  async () => ({ kind: 'allow' }),
+)
+assert.equal(reloadAsked.kind, 'ask')
+const reloadToken = reloadAsked.reason.match(/rule-token:\s*([a-f0-9]{16,64})/)[1]
+const reloadPendingFile = join(reloadDir, 'risk-pending.json')
+let reloadPersisted = ''
+for (let i = 0; i < 100; i += 1) {
+  try {
+    reloadPersisted = await readFile(reloadPendingFile, 'utf8')
+  } catch {}
+  if (reloadPersisted.includes(reloadToken)) break
+  await new Promise(resolve => setTimeout(resolve, 10))
+}
+assert.match(reloadPersisted, new RegExp(reloadToken))
+const secondMount = mountApply()
+const reloadRoute = secondMount.routes.find(route => route.path === '/api/context-guard-risk-rule')
+assert.ok(reloadRoute)
+const reloadSaved = await postRiskRuleWith(reloadRoute.handler, { action: 'allow', token: reloadToken, callId: 'call-reload-2' })
+assert.equal(reloadSaved.status, 200)
+assert.equal(reloadSaved.body.ok, true)
+const reloadAllowed = await secondMount.handlers.get('tools/pre-execute')[0](
+  { name: 'bash', callId: 'call-reload-3', arguments: { command: 'rm -rf ./coverage' }, agent: { id: 'session-reload' } },
+  async () => ({ kind: 'allow' }),
+)
+assert.equal(reloadAllowed.kind, 'allow')
 
 // 命令 lint 与风险规则合并为一个 ask
 const lintExec = { ...riskyExec, callId: 'call-lint-1', arguments: { command: 'cat ~/.dsh/profiles/web/cordis.patch.yml' } }
@@ -662,7 +745,7 @@ assert.equal(docAllowed, null)
   assert.equal(rendered.input.allowLabel, '仅允许本次')
   assert.equal(typeof rendered.input.onAlways, 'function')
   await rendered.input.onAlways()
-  assert.deepEqual(ruleCalls, [{ url: '/api/context-guard-risk-rule', body: { action: 'allow', token: '0123456789abcdef01234567' } }])
+  assert.deepEqual(ruleCalls, [{ url: '/api/context-guard-risk-rule', body: { action: 'allow', token: '0123456789abcdef01234567', callId: 'call-risk-1' } }])
   assert.deepEqual(answers, ['allowed-once'])
   // 非本插件风险审批交给内置审批面板
   assert.equal(registered['conversation.composer'].select({ pendingInteraction: { kind: 'approval', reason: 'other' } }), null)
