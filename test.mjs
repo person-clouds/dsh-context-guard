@@ -135,6 +135,55 @@ assert.equal(detectFileTools({ tools: fakeTools([]) }), null)
 const scopedTools = { definitions: scope => (scope === 'agent-1' ? [{ name: 'ops_inspect_local_file' }, { name: 'ops_grep' }, { name: 'ops_glob' }] : []) }
 assert.match(commandGuidanceText(detectFileTools({ tools: scopedTools }, 'agent-1')), /ops_inspect_local_file/)
 assert.equal(detectFileTools({ tools: scopedTools }, 'agent-2'), null)
+// 回归：cordis 上下文未 inject 'tools'/'systemPrompt' 时属性读取会抛 `cannot get property ... without inject`，
+// 插件必须走 ctx.get 兜底且不抛（否则 bash 的 pre-execute 直接失败）。
+const strictCtx = {
+  get: name => (name === 'tools' ? fakeTools(['ops_inspect_local_file', 'ops_grep', 'ops_glob']) : undefined),
+  get tools() { throw new Error('cannot get property "tools" without inject') },
+  get systemPrompt() { throw new Error('cannot get property "systemPrompt" without inject') },
+}
+const strictDetected = detectFileTools(strictCtx)
+assert.ok(strictDetected)
+assert.match(commandGuidanceText(strictDetected), /ops_inspect_local_file/)
+const strictEmptyCtx = {
+  get: () => undefined,
+  get tools() { throw new Error('cannot get property "tools" without inject') },
+}
+assert.equal(detectFileTools(strictEmptyCtx), null)
+
+// 端到端回归：无 inject 的工具面上，注册提示段落与 bash pre-execute 都必须正常
+const strictHandlers = new Map()
+let strictGuidance
+const strictApplyCtx = {
+  on(type, fn) {
+    if (!strictHandlers.has(type)) strictHandlers.set(type, [])
+    strictHandlers.get(type).push(fn)
+  },
+  logger: { warn() {} },
+  get(name) {
+    if (name === 'tools') return fakeTools(['ops_inspect_local_file', 'ops_grep', 'ops_glob'])
+    if (name === 'systemPrompt') return { section: section => { strictGuidance = section; return () => {} } }
+    return undefined
+  },
+  get tools() { throw new Error('cannot get property "tools" without inject') },
+  get systemPrompt() { throw new Error('cannot get property "systemPrompt" without inject') },
+}
+apply(strictApplyCtx, {
+  dir,
+  outputDir: join(dir, 'strict-output'),
+  metricsDir: join(dir, 'strict-metrics'),
+  riskRuleFile: join(dir, 'strict-risk-allow.json'),
+  cleanupEnabled: false,
+  docGuardEnabled: false,
+})
+assert.equal(strictGuidance?.name, 'context-guard:command-guidance')
+assert.match(commandGuidanceText(detectFileTools(strictApplyCtx)), /ops_inspect_local_file/)
+const strictAllowed = await strictHandlers.get('tools/pre-execute')[0](
+  { name: 'bash', callId: 'call-inject-1', arguments: { command: 'echo ok' }, agent: { id: 'session-strict' } },
+  async () => ({ kind: 'allow' }),
+)
+assert.equal(strictAllowed.kind, 'allow')
+
 const opsLint = lintCommand('cat app.log', { read: 'ops_inspect_local_file', grep: 'ops_grep' })
 assert.match(opsLint.reasons[0].alternative, /ops_inspect_local_file\(\{ path:/)
 

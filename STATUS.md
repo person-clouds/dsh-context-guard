@@ -1,6 +1,6 @@
 # STATUS — dsh-context-guard
 
-- 更新时间：2026-11-20
+- 更新时间：2026-11-21
 - 一句话：DSH 工具输出预算/落盘、去重、单轮调用/输出门禁、硬上限后 Web 自动填入「继续」、命令形态拦截、风险确认与窄规则自动放行、内置放行默认值外置、只读诊断、压缩归档与指标。
 - 位置：`dsh-context-guard/`；web profile 已按 link 加载并完成「始终允许」实机验证，superagent profile 待重启后核对。
 
@@ -36,6 +36,7 @@
 - [x] 默认放行值外置：链接主机（`local`/`codeHosting`/`api`/`docs`/`techMedia` 五组 28 个）、`rm` 临时根与 test 目录、`~/opt` 开关、产物目录、写探测、`sudo`/`systemctl` 只读清单、git 只读子命令登记统一移入随包 `config/risk-allow-default.json`；`lib/default-allowlist.js` 负责读取、字段校验与规范化，配置缺失或非法时回退最小安全默认（仅 loopback 链接）并 warning；`DEFAULT_ALLOW_HOSTS` 与产物目录集合改由配置导出；`riskAllowHosts` 显式覆盖语义不变，用户 host 规则继续与内置并集；个人/内部域名不进内置。
 - [x] 中文 README 优先展示，补充英文 `README.en.md`；
 - [x] linuxops 可选安装方案：不安装自动回退、插件只读兼容层、通过 `--binary` 接入自建/上游二进制；安装脚本不 sudo、不自动改 PATH；
+- [x] 修复「bash 全量报 `cannot get property "tools" without inject`」：`detectFileTools` 与 `registerCommandGuidance` 原先直接读 `ctx.tools`/`ctx.systemPrompt`，插件未声明 `inject` 时 cordis 代理在属性读取阶段即抛错，`tools/pre-execute` 的命令形态检查因此让所有 bash 调用失败（0.4.2 引入 `detectFileTools` 时回归）；改为优先 `ctx.get()`（无 inject 要求、取不到返回 `undefined`）并保留属性读取兜底且包在 `try` 中，同时修复命令提示段落一直未注册的问题；`test.mjs` 增加严格上下文（属性读取即抛）的单元与端到端回归用例。
 
 ## 待办
 

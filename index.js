@@ -315,7 +315,15 @@ const OPS_FILE_TOOLS = { read: 'ops_inspect_local_file', grep: 'ops_grep', glob:
 /** 读取当前工具面实际发布的文件工具：dsh-ops 的 ops_* 优先，其次官方 read/grep/glob，都没有则返回 null。
  * scope/toolSet 为 DSH 组装系统提示时传入的视图（section 的 text 回调），用于看到本步真实可见的工具。 */
 export function detectFileTools(ctx, scope, toolSet) {
-  const tools = ctx?.tools ?? ctx?.get?.('tools')
+  // 必须先走 ctx.get：cordis 上下文未 inject 'tools' 时，直接读 ctx.tools 会抛
+  // `cannot get property "tools" without inject`，而 ctx.get 是「without the inject requirement」
+  // 的读取方式，取不到只返回 undefined。
+  let tools
+  try {
+    tools = ctx?.get?.('tools') ?? ctx?.tools
+  } catch {
+    tools = undefined
+  }
   const hasFrom = name => {
     try {
       return Boolean(tools?.get?.(name, scope, toolSet))
@@ -360,7 +368,7 @@ export function commandGuidanceText(files) {
 function registerCommandGuidance(ctx, cfg) {
   if (!cfg.commandLintEnabled || !cfg.commandGuidanceEnabled) return
   try {
-    const systemPrompt = ctx.systemPrompt ?? ctx.get?.('systemPrompt')
+    const systemPrompt = ctx.get?.('systemPrompt') ?? ctx.systemPrompt
     if (typeof systemPrompt?.section !== 'function') return
     systemPrompt.section({
       name: 'context-guard:command-guidance',
