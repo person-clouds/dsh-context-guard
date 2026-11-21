@@ -37,6 +37,7 @@
 - [x] 中文 README 优先展示，补充英文 `README.en.md`；
 - [x] linuxops 可选安装方案：不安装自动回退、插件只读兼容层、通过 `--binary` 接入自建/上游二进制；安装脚本不 sudo、不自动改 PATH；
 - [x] 修复「bash 全量报 `cannot get property "tools" without inject`」：`detectFileTools` 与 `registerCommandGuidance` 原先直接读 `ctx.tools`/`ctx.systemPrompt`，插件未声明 `inject` 时 cordis 代理在属性读取阶段即抛错，`tools/pre-execute` 的命令形态检查因此让所有 bash 调用失败（0.4.2 引入 `detectFileTools` 时回归）；改为优先 `ctx.get()`（无 inject 要求、取不到返回 `undefined`）并保留属性读取兜底且包在 `try` 中，同时修复命令提示段落一直未注册的问题；`test.mjs` 增加严格上下文（属性读取即抛）的单元与端到端回归用例。
+- [x] 修复替代命令提示指错工具：`tools/pre-execute` 里 `detectFileTools(ctx)` 没传 scope，取到的是全局视图，看不到按 agent 作用域注册的 `ops_*`，于是文案退化成官方 `read`/`grep`/`glob`（部分会话根本没有 `read`）；改为 `detectFileTools(ctx, exec?.agent)`，与系统提示段落拿到的 `scope` 保持一致；`test.mjs` 增加「全局视图只有 `read`、agent 视图有 `ops_*` 时 deny 文案必须是 `ops_inspect_local_file`」回归用例。
 
 ## 待办
 
@@ -94,3 +95,4 @@
 | 2026-11-21 | `npm test`（默认放行配置外置） | ok；新增内置配置加载与分组断言（28 主机、22 产物目录、23 个 sudo 只读命令、10 个 systemctl 子命令、10 个 git 只读子命令）、Tailscale 域名不入内置、用户 host 规则与内置并集、缺配置与非法配置回退最小安全默认并告警 |
 | 2026-11-21 | `npm pack --dry-run` | 24 files，包含 `config/risk-allow-default.json` 与 `lib/default-allowlist.js` |
 | 2026-11-21 | `./scripts/check.sh --repo dsh-context-guard` | PASS（5 篇文档，0 项警告） |
+| 2026-11-21 | `npm test`（未 inject 读取 + 作用域工具面） | ok；新增「属性读取即抛 `cannot get property ... without inject`」的严格上下文单元/端到端回归（bash pre-execute 必须放行），以及 `exec.agent` 作用域视图断言（全局视图只有 `read` 时 deny 文案仍须给 `ops_inspect_local_file`）；实机生效需重启 DSH Host |

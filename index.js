@@ -664,7 +664,9 @@ export function apply(ctx, config = {}) {
       }
     }
     if (cfg.commandLintEnabled && cfg.toolNames.includes(exec?.name)) {
-      const lint = lintCommand(command, detectFileTools(ctx))
+      // 传 exec.agent 作 scope：ops_* 按 agent 作用域注册，全局视图看不到，
+      // 不传会退化成官方的 read/grep/glob，替代命令提示就指错工具。
+      const lint = lintCommand(command, detectFileTools(ctx, exec?.agent))
       if (lint.hit) {
         ctx.logger?.info?.('context-guard: 命令形态拦截 (%s): %s', cfg.commandLintMode, lint.reasons.map(reason => reason.code).join(', '))
         const verdict = lintDecision(lint, command, cfg.commandLintMode)

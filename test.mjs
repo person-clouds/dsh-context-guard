@@ -184,6 +184,41 @@ const strictAllowed = await strictHandlers.get('tools/pre-execute')[0](
 )
 assert.equal(strictAllowed.kind, 'allow')
 
+// 回归：ops_* 按 agent 作用域注册，全局视图看不到；pre-execute 必须按 exec.agent 读出
+// 作用域视图，否则替代命令会退化成本会话并不存在的官方 read/grep/glob。
+const scopeAgent = { id: 'session-scoped' }
+const surfaceTools = {
+  definitions: scope => (scope === scopeAgent
+    ? [{ name: 'ops_inspect_local_file' }, { name: 'ops_grep' }, { name: 'ops_glob' }, { name: 'ops_discover_tools' }]
+    : [{ name: 'read' }, { name: 'grep' }, { name: 'glob' }]),
+}
+assert.match(detectFileTools({ tools: surfaceTools }, scopeAgent)?.read, /ops_inspect_local_file/)
+assert.equal(detectFileTools({ tools: surfaceTools })?.read, 'read')
+const surfaceHandlers = new Map()
+const surfaceCtx = {
+  on(type, fn) {
+    if (!surfaceHandlers.has(type)) surfaceHandlers.set(type, [])
+    surfaceHandlers.get(type).push(fn)
+  },
+  logger: { warn() {} },
+  get: name => (name === 'tools' ? surfaceTools : undefined),
+}
+apply(surfaceCtx, {
+  dir,
+  outputDir: join(dir, 'scope-output'),
+  metricsDir: join(dir, 'scope-metrics'),
+  riskRuleFile: join(dir, 'scope-risk-allow.json'),
+  cleanupEnabled: false,
+  docGuardEnabled: false,
+})
+const scopedLint = await surfaceHandlers.get('tools/pre-execute')[0](
+  { name: 'bash', callId: 'call-scope-1', arguments: { command: 'cat app.log' }, agent: scopeAgent },
+  async () => ({ kind: 'allow' }),
+)
+assert.equal(scopedLint.kind, 'deny')
+assert.match(scopedLint.reason, /ops_inspect_local_file/)
+assert.doesNotMatch(scopedLint.reason, /read\(\{ file_path/)
+
 const opsLint = lintCommand('cat app.log', { read: 'ops_inspect_local_file', grep: 'ops_grep' })
 assert.match(opsLint.reasons[0].alternative, /ops_inspect_local_file\(\{ path:/)
 
