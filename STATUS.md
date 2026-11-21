@@ -99,3 +99,4 @@
 | 2026-11-21 | `npm publish 0.4.4` | ok；`npm publish --access public` 输出 `+ @fenghoer/dsh-context-guard@0.4.4`（`npm whoami` 在默认 registry 下报 need auth，但发布走 registry.npmjs.org 成功；按约定发布 5 分钟后再核版本） |
 | 2026-11-21 | tag `v0.4.4` | 已推送 `origin`；`gh` 未登录（`gh auth status` 无 host） |
 | 2026-11-21 | GitHub Release `v0.4.4` | ok；用 `GH_TOKEN=$(git credential fill ...)` 从 git credential helper 取 zhyfor PAT（token 未落盘、未打印），`gh release create` 成功；资产 `dsh-context-guard.tgz` 58586 字节，`releases/latest/download` 返回 200 |
+| 2026-11-21 | 实机验收（重启后） | `cat app.log` 被 deny，文案已是 `ops_inspect_local_file({ path, offset: 1, limit: 120 })`，说明 0.4.4 的 `exec.agent` 作用域修复生效；有界形式 `cat x \| head` 仍正常放行 |
