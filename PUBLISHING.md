@@ -1,6 +1,6 @@
 # 发布到 DSH 插件市场
 
-> 状态：**npm `@fenghoer/dsh-context-guard@0.4.4` 已发布；tag `v0.4.4` 已推送，GitHub Release `v0.4.4` 待创建（本机 `gh` 未登录）；`v0.4.1` Release 与 awesome-dsh-plugin PR #15266 已存在。**
+> 状态：**npm `@fenghoer/dsh-context-guard@0.4.4` 已发布；tag `v0.4.4` 已推送，GitHub Release `v0.4.4` 已发布（资产 `dsh-context-guard.tgz` 58586 字节，`latest/download` 返回 200）；`v0.4.1` Release 与 awesome-dsh-plugin PR #15266 已存在。**
 > 目标仓库：`person-clouds/dsh-context-guard`
 > npm 包名：`@fenghoer/dsh-context-guard`（npm 上 `dsh-context-guard` 已被其他项目占用）
 

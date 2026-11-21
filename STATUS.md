@@ -97,4 +97,5 @@
 | 2026-11-21 | `./scripts/check.sh --repo dsh-context-guard` | PASS（5 篇文档，0 项警告） |
 | 2026-11-21 | `npm test`（未 inject 读取 + 作用域工具面） | ok；新增「属性读取即抛 `cannot get property ... without inject`」的严格上下文单元/端到端回归（bash pre-execute 必须放行），以及 `exec.agent` 作用域视图断言（全局视图只有 `read` 时 deny 文案仍须给 `ops_inspect_local_file`）；实机生效需重启 DSH Host |
 | 2026-11-21 | `npm publish 0.4.4` | ok；`npm publish --access public` 输出 `+ @fenghoer/dsh-context-guard@0.4.4`（`npm whoami` 在默认 registry 下报 need auth，但发布走 registry.npmjs.org 成功；按约定发布 5 分钟后再核版本） |
-| 2026-11-21 | tag `v0.4.4` | 已推送 `origin`；GitHub Release 未创建——本机 `gh` 未登录（`gh auth status` 无任何 host），`gh release list` 提示先 `gh auth login` 或设 `GH_TOKEN` |
+| 2026-11-21 | tag `v0.4.4` | 已推送 `origin`；`gh` 未登录（`gh auth status` 无 host） |
+| 2026-11-21 | GitHub Release `v0.4.4` | ok；用 `GH_TOKEN=$(git credential fill ...)` 从 git credential helper 取 zhyfor PAT（token 未落盘、未打印），`gh release create` 成功；资产 `dsh-context-guard.tgz` 58586 字节，`releases/latest/download` 返回 200 |
