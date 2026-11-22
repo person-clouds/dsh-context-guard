@@ -115,7 +115,7 @@ if cg_start is not None:
         changed = True
 
 # 1d) context-guard 配置补 sessionBudgets（D：会话 25/40）。配置整体替换默认规则，
-#     所以必须同时写回默认 V： 规则；已有 sessionBudgets 时不动。
+#     所以必须同时写回默认 V： 规则；已有 sessionBudgets 时只升级 V 规则 denyTools。
 NL = chr(10)
 BS = chr(92)
 lines = text.splitlines()
@@ -149,7 +149,7 @@ if cg_start is not None:
             ' ' * sub_indent + 'maxCallsPerTurn: 25',
             ' ' * sub_indent + 'hardMaxCallsPerTurn: 40',
             ' ' * sub_indent + 'maxTurnOutputChars: 20000',
-            ' ' * sub_indent + 'denyTools: [write, edit]',
+            ' ' * sub_indent + 'denyTools: [write, edit, ops_write_file, ops_edit_file, ops_replace, ops_remove, ops_move, ops_copy, ops_batch]',
             ' ' * sub_indent + 'denyCommands:',
             ' ' * sub_indent + "  - '^" + BS + "s*(npm|pnpm|yarn)" + BS + "s+(i|install|ci)" + BS + "b'",
             ' ' * sub_indent + "  - '^" + BS + "s*git" + BS + "s+(commit|push|add)" + BS + "b'",
@@ -158,6 +158,16 @@ if cg_start is not None:
         lines[config_index + 1:config_index + 1] = rules
         text = NL.join(lines)
         changed = True
+    else:
+        # 1e) 旧 profile 已有 sessionBudgets：只把 V 规则的 denyTools 升级为含 ops_* 写工具。
+        for i in range(cg_start, cg_end):
+            if lines[i].strip() == 'denyTools: [write, edit]':
+                lines[i] = lines[i].replace(
+                    'denyTools: [write, edit]',
+                    'denyTools: [write, edit, ops_write_file, ops_edit_file, ops_replace, ops_remove, ops_move, ops_copy, ops_batch]',
+                )
+                text = NL.join(lines)
+                changed = True
 
 # 2) persistent-bash 不在 profile 顶层，旧写法会报 patch: entry not found。
 #    删除旧块，改为覆盖 minimal preset 的完整 plugins 列表。

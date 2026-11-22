@@ -1,7 +1,7 @@
 ---
 implementation_status: in_progress
 created_at: 2026-11-22 23:12:00
-updated_at: 2026-11-22 23:13:00
+updated_at: 2026-11-22 23:25:00
 ---
 
 # PLAN：D 会话预算硬拦
@@ -51,3 +51,4 @@ updated_at: 2026-11-22 23:13:00
 
 - 2026-11-22 23:12 新建：按 PLAN-diagnosis-efficiency 遗留 1 拆分，范围收窄为配置级 D：25/40。
 - 2026-11-22 23:13 实施：脚本 1c 收窄 + 1d 注入；fixture 实跑、`matchBudget` 契约、`npm test`、`check.sh` 均通过。待用户执行脚本并重启 `dsh web` 后复核生效。
+- 2026-11-22 23:25 追加：按用户要求把 `ops_*` 写工具补进 V 规则 `denyTools`（默认值、脚本 1d 新写入、1e 旧配置升级、`test.mjs` 断言、README 中英同步）；D 预算仍未实机生效，状态保持进行中。

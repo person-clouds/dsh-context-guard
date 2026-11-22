@@ -47,6 +47,7 @@
 - [x] 重复派单硬拦（2026-11-22）：`subagent`/`subagent_fork`/`workflow` 的 prompt 声明「快照：`<sha>`」时，同会话同指纹 2 小时内第二次派单直接 `deny`（唯一能在 `tools/pre-execute` 拒绝的层就是本插件），prompt 含 `verify-again` 或未声明快照不拦；`test.mjs` 增加规则编译/标题匹配/指纹/窗口过期/去重与端到端用例。
 - [x] 核验态契约与版本对齐（2026-11-22，0.5.0）：标题正则 `^(?:TODO[：:]\s*)?V[：:]` 由 `test.mjs` 字面契约锁住（`V：`、`TODO：V：`、`V：计划：` 命中，`D：` / `G：` 不命中）；README 中英双份写明标题由外部写入（配套 `dsh-workflow-shortcuts` ≥ `0.4.0` 提供 `/V`、`/VP`，只装本插件时手动改名同样生效）、默认 `sessionBudgets` 是可覆盖的示例规则、`/VP` 提示词不写快照故不参与派单去重；`package.json` 升 `0.5.0`；原有预算数字、`deny` 列表与派单去重行为未改。
 - [x] D：会话预算（2026-11-22，配置级）：`scripts/apply-profile.sh` 幂等写入 `sessionBudgets`——`D：` / `TODO D：` 25/40 且不设 `denyTools`（D 会话仍要写计划），并原样写回默认 `V：` 规则（配置整体替换默认，不能只写 D）；旧阈值迁移（1c）收窄到 context-guard 块，web 已调的 40/80 不再被改成 40/160；插件默认值与 `test.mjs` 契约不变（`D：` / `G：` 仍不命中原生规则，D 只在写了配置的 profile 生效）。
+- [x] 核验态只读补 dsh-ops 写工具（2026-11-22）：`denyTools` 默认从 `write`/`edit` 扩到同时拦 `ops_write_file`、`ops_edit_file`、`ops_replace`、`ops_remove`、`ops_move`、`ops_copy`、`ops_batch`（名字不同，精确匹配才能挡住只读绕过）；`apply-profile.sh` 1d 新写入用新列表，1e 对已有 `sessionBudgets` 的 profile 只升级该行；PTC `run_code` 不在默认拒绝列表，README 中英双份写明其边界。
 
 ## 待办
 
@@ -133,3 +134,6 @@
 | 2026-11-22 | `./scripts/check.sh --repo dsh-context-guard --changed` | PASS（见提交前输出；`README.md` 超行数属既有篇幅） |
 | 2026-11-22 | `npm test`（风险规则收口） | ok；新增 URL 尾部标点/括号归一、非法 host 规则惰性、`/tmp` 免询问、cwd `.tmp*` temp-rm（相对路径/重载/换 cwd/软链逃逸/复合命令/`.git`/`sudo`/通配/尾斜杠）、artifact-rm 优先、`scope:'command'` 路由、待放行项 cwd 落盘与 pre-execute 端到端放行 |
 | 2026-11-22 | `./scripts/check.sh --repo dsh-context-guard` | PASS（见本次提交前输出；README 超行数属既有篇幅） |
+| 2026-11-22 | `npm test`（V 只读补 ops 写工具） | ok；新增断言：默认 V 规则 `denyTools` 含 `ops_write_file`/`ops_edit_file`/`ops_replace`/`ops_remove`/`ops_move`/`ops_copy`/`ops_batch`，与 `write`/`edit` 一起锁定 |
+| 2026-11-22 | `apply-profile.sh` V 规则 denyTools 升级（fixture 实跑） | PASS：以真实 web profile 副本（已有 `sessionBudgets`，V 行原为 `denyTools: [write, edit]`）跑脚本，仅该行替换为含 7 个 `ops_*` 的列表，D 规则与 `40/80` 未变；二次执行无 diff（幂等） |
+| 2026-11-22 | `./scripts/check.sh --repo dsh-context-guard` | PASS（本轮提交前输出；README 超行数属既有篇幅） |
