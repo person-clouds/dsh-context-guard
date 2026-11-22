@@ -20,6 +20,16 @@ import { analyzeCommand, riskAskDecision } from './lib/risk.js'
 import { PendingRiskRules, RISK_RULE_ENDPOINT, RiskRuleStore, filterRiskByRules, normalizeRuleReason, ruleSpecsFor } from './lib/risk-allow.js'
 import { lintCommand, lintDecision } from './lib/command-lint.js'
 import { TurnBudget } from './lib/turn-budget.js'
+import {
+  DEFAULT_DISPATCH_OVERRIDE,
+  DEFAULT_DISPATCH_WINDOW_MS,
+  DEFAULT_SESSION_BUDGETS,
+  DispatchRegistry,
+  SessionTitleCache,
+  compileBudgetRules,
+  matchBudget,
+  snapshotFingerprint,
+} from './lib/verify-mode.js'
 import { HARD_LIMIT_DRAFT_MARKER } from './lib/continue-draft.js'
 
 const execFileAsync = promisify(execFile)
@@ -28,6 +38,7 @@ export const name = 'dsh-context-guard'
 export { HARD_LIMIT_DRAFT_MARKER } from './lib/continue-draft.js'
 
 const DEFAULT_TOOL_NAMES = ['bash', 'persistent-bash', 'terminal-bash']
+const DEFAULT_DISPATCH_TOOLS = ['subagent', 'subagent_fork', 'workflow']
 
 function textOf(content) {
   return contentText(content)
@@ -231,6 +242,18 @@ function guardConfig(config) {
     hardMaxCallsPerTurn: Number(config.hardMaxCallsPerTurn) || 160,
     maxTurnOutputChars: Number(config.maxTurnOutputChars) || 40000,
     exhaustedOutputChars: Number(config.exhaustedOutputChars) || 800,
+    sessionBudgets: Array.isArray(config.sessionBudgets) ? config.sessionBudgets : DEFAULT_SESSION_BUDGETS,
+    sessionTitleTtlMs: Number(config.sessionTitleTtlMs) || 5000,
+    dispatchGuard: {
+      enabled: config.dispatchGuard?.enabled !== false,
+      windowMs: Number(config.dispatchGuard?.windowMs) || DEFAULT_DISPATCH_WINDOW_MS,
+      overrideToken: typeof config.dispatchGuard?.overrideToken === 'string' && config.dispatchGuard.overrideToken
+        ? config.dispatchGuard.overrideToken
+        : DEFAULT_DISPATCH_OVERRIDE,
+    },
+    dispatchTools: Array.isArray(config.dispatchTools) && config.dispatchTools.length > 0
+      ? config.dispatchTools.map(String)
+      : DEFAULT_DISPATCH_TOOLS,
     outputDir: typeof config.outputDir === 'string' && config.outputDir ? config.outputDir : join(dshHome(), 'tool-output'),
     thresholdChars: config.thresholdChars,
     headChars: config.headChars,
@@ -287,6 +310,79 @@ function mergeAskDecisions(decisions) {
 function stepLabel(step, locale) {
   if (step === null || step === undefined || step === '') return locale === 'en' ? 'unknown' : '未知'
   return String(step)
+}
+
+/** 核验态下会话标题：`sessionTitle.get(session)` 的返回值可能是字符串或带 title 的快照。 */
+function sessionTitleOf(ctx, exec, cache) {
+  const sessionId = sessionIdOf(exec)
+  const cached = cache.read(sessionId)
+  if (cached !== undefined) return cached
+  let title = ''
+  try {
+    const titles = ctx.get('sessionTitle')
+    const session = exec?.agent?.session
+    if (titles && typeof titles.get === 'function' && session) {
+      const value = titles.get(session)
+      title = typeof value === 'string' ? value : String(value?.title || '')
+    }
+  } catch {
+    title = ''
+  }
+  cache.write(sessionId, title)
+  return title
+}
+
+/** 派单类工具的 prompt：把 arguments 里常见的文本字段拼起来，供快照指纹与 override 判定。 */
+function promptOf(exec) {
+  const args = exec?.arguments || {}
+  const parts = []
+  for (const field of ['prompt', 'task', 'description', 'instructions', 'message', 'goal']) {
+    const value = args[field]
+    if (typeof value === 'string') parts.push(value)
+  }
+  if (Array.isArray(args.messages)) {
+    for (const message of args.messages) {
+      if (typeof message === 'string') parts.push(message)
+      else if (typeof message?.content === 'string') parts.push(message.content)
+    }
+  }
+  return parts.join('\n')
+}
+
+function verifyDenyToolDecision(rule, toolName) {
+  const label = rule.label || '核验会话'
+  return {
+    kind: 'deny',
+    reason: `context-guard verify-mode: ${label}只读，禁止调用 ${toolName}；补丁请在 \`/G\` 实现会话里改，核验只报告。`,
+    displayReason: {
+      en: `context-guard verify-mode: session "${label}" is read-only, so ${toolName} is blocked. Edit in the implementation session, not the verification session.`,
+      zh: `核验会话只读：已在 ${label} 拦截 ${toolName}。补丁回实现会话（\`/G\`）修改，核验会话只报告结论。`,
+    },
+  }
+}
+
+function verifyDenyCommandDecision(rule, command) {
+  const label = rule.label || '核验会话'
+  const preview = String(command).replaceAll('\n', ' ').slice(0, 160)
+  return {
+    kind: 'deny',
+    reason: `context-guard verify-mode: ${label}禁止破坏性命令（装依赖/改仓库/重启服务），已拦截: ${preview}`,
+    displayReason: {
+      en: `context-guard verify-mode: destructive commands (installs, repo writes, service restarts) are blocked in a verification session. Blocked: ${preview}`,
+      zh: `核验会话只读：装依赖、改仓库、重启服务在核验态一律拦截。被拦命令：${preview}`,
+    },
+  }
+}
+
+function dispatchDuplicateDecision(key, firstAt) {
+  return {
+    kind: 'deny',
+    reason: `context-guard dispatch-guard: 快照 ${key} 本轮已派过核验（首次 ${iso(firstAt)}），重复派单已拦截；确需复验请在 prompt 里写 verify-again。`,
+    displayReason: {
+      en: `context-guard dispatch-guard: snapshot ${key} was already dispatched for review at ${iso(firstAt)}. Duplicate dispatch blocked; add \`verify-again\` to the prompt if a re-check is really needed.`,
+      zh: `同一快照 ${key} 已在 ${iso(firstAt)} 派过核验，重复派单已拦截。复验确实需要时，在派单 prompt 里写明 verify-again。`,
+    },
+  }
 }
 
 function callLimitAskDecision(check) {
@@ -420,7 +516,8 @@ async function guardToolResult(exec, result, decision, cfg, cache, metrics, turn
   if (turnBudget?.isExhausted(sessionId) && text.length > cfg.exhaustedOutputChars) {
     try {
       const log = await writeToolLog(cfg.outputDir, sessionId, exec.callId, text)
-      const header = `[context-guard:turn-output-limit] ${exec.name} 单轮累计输出已超过 ${turnBudget.maxTurnOutputChars} chars；本次 ${text.length} chars 已完整落盘：${log.path}\n`
+      const limit = turnBudget.limitsFor(sessionId).maxTurnOutputChars
+      const header = `[context-guard:turn-output-limit] ${exec.name} 单轮累计输出已超过 ${limit} chars；本次 ${text.length} chars 已完整落盘：${log.path}\n`
       const footer = `\n[... 本轮后续结果只保留前 ${cfg.exhaustedOutputChars} 字符，完整内容见上方路径 ...]`
       const summary = renderBounded(text, {
         budget: cfg.exhaustedOutputChars,
@@ -596,11 +693,23 @@ export function apply(ctx, config = {}) {
   const cache = new DedupCache({ ttlMs: cfg.dedupTtlMs, maxEntries: cfg.dedupMaxEntries })
   const metrics = new MetricsRecorder(cfg.metricsDir, { logger: ctx.logger })
   registerCommandGuidance(ctx, cfg)
+  const budgetRules = compileBudgetRules(cfg.sessionBudgets)
+  const titleCache = new SessionTitleCache({ ttlMs: cfg.sessionTitleTtlMs })
+  const dispatchRegistry = new DispatchRegistry({ windowMs: cfg.dispatchGuard.windowMs })
+  /** 命中预算规则的会话（核验态）返回规则，否则 null；同时把标题写进缓存供 turnBudget 使用。 */
+  const sessionRuleFor = exec => {
+    if (budgetRules.length === 0) return null
+    return matchBudget(budgetRules, sessionTitleOf(ctx, exec, titleCache))
+  }
   const turnBudget = new TurnBudget({
     maxCallsPerTurn: cfg.maxCallsPerTurn,
     hardMaxCallsPerTurn: cfg.hardMaxCallsPerTurn,
     maxTurnOutputChars: cfg.maxTurnOutputChars,
     exhaustedOutputChars: cfg.exhaustedOutputChars,
+    budgetFor: sessionId => {
+      const title = titleCache.read(sessionId)
+      return title === undefined ? null : matchBudget(budgetRules, title)
+    },
     logger: ctx.logger,
   })
   if (cfg.cleanupEnabled) {
@@ -636,10 +745,36 @@ export function apply(ctx, config = {}) {
     const decision = await next()
     if (decision.kind !== 'allow') return decision
     if (!cfg.enabled) return decision
+
+    // 派单去重：只有 prompt 声明了「快照：<sha>」才参与，普通子任务不受影响。
+    if (cfg.dispatchGuard.enabled && cfg.dispatchTools.includes(exec?.name)) {
+      const prompt = promptOf(exec)
+      const fingerprint = snapshotFingerprint(prompt)
+      const verdict = dispatchRegistry.claim(sessionIdOf(exec), fingerprint, {
+        overrideToken: cfg.dispatchGuard.overrideToken,
+        prompt,
+      })
+      if (verdict.duplicate) {
+        ctx.logger?.info?.('context-guard: 拦截重复派单 (%s): %s', fingerprint, sessionIdOf(exec))
+        return dispatchDuplicateDecision(fingerprint, verdict.firstAt)
+      }
+    }
+
+    // 核验态：标题命中 sessionBudgets 后只读 + 预算收紧，限制在 checkCall 处生效。
+    const rule = sessionRuleFor(exec)
+    if (rule && rule.denyTools.includes(exec?.name)) {
+      ctx.logger?.info?.('context-guard: 核验态拦截工具 (%s): %s', exec?.name, sessionIdOf(exec))
+      return verifyDenyToolDecision(rule, exec?.name)
+    }
+
     const command = commandOf(exec) || (exec?.name === 'web_fetch' && typeof exec?.arguments?.url === 'string'
       ? `curl ${exec.arguments.url}`
       : '')
     if (!command) return decision
+    if (rule && rule.denyCommandRes.some(re => re.test(command))) {
+      ctx.logger?.info?.('context-guard: 核验态拦截破坏性命令: %s', sessionIdOf(exec))
+      return verifyDenyCommandDecision(rule, command)
+    }
 
     const asks = []
     if (cfg.riskCheckEnabled && cfg.riskToolNames.includes(exec?.name)) {

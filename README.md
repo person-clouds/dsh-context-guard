@@ -245,6 +245,8 @@ bash dsh-context-guard/scripts/apply-compaction.sh apply     # 备份后原位�
         hardMaxCallsPerTurn: 160         # 第 160 次硬拒绝并自动填「继续」
         maxTurnOutputChars: 40000
         exhaustedOutputChars: 800
+        # sessionBudgets: 见「核验态与派单去重」，默认 V: 会话 25/40/20000
+        # dispatchGuard: {enabled: true, windowMs: 7200000, overrideToken: verify-again}
         commandLintEnabled: true
         commandLintMode: deny      # deny（默认，硬拦截）| ask（复杂流程确认）
         commandGuidanceEnabled: true
@@ -263,6 +265,18 @@ bash dsh-context-guard/scripts/apply-compaction.sh apply     # 备份后原位�
         maxTotalBytes: 524288000
         maxFilesPerSession: 300
 ```
+
+## 核验态与派单去重
+
+会话标题命中 `sessionBudgets[].match` 时进入核验态（默认 `^(?:TODO[：:]\s*)?V[：:]`，即 `/V` 命令开出的 `V:` 会话）：
+
+- 预算收紧：第 25 次 `bash` 提醒、第 40 次硬拒、单轮输出超过 20000 字符后只留摘要；
+- 只读：`denyTools`（默认 `write`、`edit`）与 `denyCommands`（装依赖、`git commit/push/add`、重启服务）直接 `deny`；
+- 标题被加 `TODO：` 前缀后仍匹配；非 `V:` 会话保持全局默认（80 / 160 / 40000）。
+
+派单去重：`dispatchTools`（默认 `subagent`、`subagent_fork`、`workflow`）的 prompt 里声明「快照：`<sha>`」时，同会话同指纹 2 小时内的第二次派单直接 `deny`，避免同一 diff 重复核验；prompt 含 `verify-again` 或未声明快照时不拦。
+
+阈值只在 `lib/verify-mode.js` 的 `DEFAULT_SESSION_BUDGETS` 维护，技能文档只引用，不重复数字。
 
 ## 测试
 

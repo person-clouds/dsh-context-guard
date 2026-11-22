@@ -10,7 +10,7 @@ status: current
 ## 0. 阅读顺序
 
 1. 本文件；
-2. [`SPEC.md`](SPEC.md)：七项能力、接口、非目标与验收命令；
+2. [`SPEC.md`](SPEC.md)：八项能力、接口、非目标与验收命令；
 3. [`README.md`](README.md) / [`README.en.md`](README.en.md)：配置项与运维脚本；
 4. [`STATUS.md`](STATUS.md)、[`PUBLISHING.md`](PUBLISHING.md)；
 5. `plans/` 下进行中的 `PLAN-*.md`（已完成在 `plans/archive/`）。

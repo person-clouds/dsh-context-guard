@@ -14,6 +14,7 @@ import { analyzeCommand, normalizeCommand, DEFAULT_ALLOW_HOSTS } from './lib/ris
 import { DEFAULT_ALLOWLIST_FILE, HOST_GROUPS, loadDefaultAllowlist } from './lib/default-allowlist.js'
 import { PendingRiskRules, RiskRuleStore, filterRiskByRules, ruleSpecsFor } from './lib/risk-allow.js'
 import { ContinueDraftBudget, HARD_LIMIT_DRAFT_MARKER, hardLimitResultOf } from './lib/continue-draft.js'
+import { DEFAULT_SESSION_BUDGETS, DispatchRegistry, compileBudgetRules, matchBudget, snapshotFingerprint } from './lib/verify-mode.js'
 
 // 命令分类与预算
 assert.equal(classifyCommand('cat /var/log/syslog'), 'unbounded')
@@ -1394,5 +1395,96 @@ assert.equal(docAllowed, null)
     assert.match(mounted.notices.at(-1).textContent, /「始终允许」失败/)
   }
 }
+
+// 核验态：预算规则编译、标题匹配、快照指纹、派单去重
+const verifyRules = compileBudgetRules(DEFAULT_SESSION_BUDGETS)
+assert.equal(verifyRules.length, 1)
+assert.equal(matchBudget(verifyRules, 'V: 核验 diff')?.maxCallsPerTurn, 25)
+assert.equal(matchBudget(verifyRules, 'TODO：V: 核验 diff')?.hardMaxCallsPerTurn, 40)
+assert.equal(matchBudget(verifyRules, 'D: 讨论 token'), null)
+assert.equal(matchBudget([], 'V: x'), null)
+assert.equal(compileBudgetRules([{ match: '(', maxCallsPerTurn: 5 }]).length, 0)
+assert.equal(snapshotFingerprint('请核验 快照：abc1234def 的改动'), 'abc1234def')
+assert.equal(snapshotFingerprint('快照: FFFFFF1 快照: 0000aaa'), '0000aaa|ffffff1')
+assert.equal(snapshotFingerprint('普通子任务，没有快照'), '')
+const dispatchRegistry = new DispatchRegistry({ windowMs: 1000, now: () => 10_000 })
+assert.equal(dispatchRegistry.claim('s1', '').duplicate, false)
+assert.equal(dispatchRegistry.claim('s1', 'abc1234').duplicate, false)
+assert.equal(dispatchRegistry.claim('s1', 'abc1234').duplicate, true)
+assert.equal(dispatchRegistry.claim('s1', 'abc1234', { prompt: '复验 verify-again' }).duplicate, false)
+assert.equal(dispatchRegistry.claim('s2', 'abc1234').duplicate, false)
+const expiring = new DispatchRegistry({ windowMs: 10, now: () => 20_000 })
+expiring.claim('s3', 'abc1234')
+expiring.now = () => 20_020
+assert.equal(expiring.claim('s3', 'abc1234').duplicate, false)
+
+// TurnBudget：按会话覆盖上限
+const verifyBudget = new TurnBudget({ budgetFor: sessionId => (sessionId === 'v' ? { maxCallsPerTurn: 25, hardMaxCallsPerTurn: 40, maxTurnOutputChars: 20000 } : null) })
+verifyBudget.startTurn('v')
+let lastCheck = null
+for (let i = 1; i <= 25; i++) lastCheck = verifyBudget.checkCall('v')
+assert.equal(lastCheck.action, 'ask')
+assert.equal(lastCheck.maxCallsPerTurn, 25)
+assert.equal(verifyBudget.checkCall('v').action, 'allow')
+let denyAction = null
+for (let i = 27; i <= 40; i++) denyAction = verifyBudget.checkCall('v').action
+assert.equal(denyAction, 'deny')
+assert.equal(verifyBudget.consumeOutput('v', 20001).exhausted, true)
+const normalBudget = new TurnBudget({})
+normalBudget.startTurn('n')
+assert.equal(normalBudget.checkCall('n').action, 'allow')
+assert.equal(normalBudget.consumeOutput('n', 20001).exhausted, false)
+
+// apply() 端到端：V: 会话只读、禁装依赖、25/40 计数；非核验会话不受影响
+const verifyHandlers = new Map()
+const verifyCtx = {
+  on(type, fn) {
+    if (!verifyHandlers.has(type)) verifyHandlers.set(type, [])
+    verifyHandlers.get(type).push(fn)
+  },
+  logger: { warn() {}, info() {} },
+  get(name) {
+    if (name === 'sessionTitle') return { get: session => (session && ['session-v', 'session-cnt'].includes(session.id) ? `V: 核验 ${session.id}` : 'D: 讨论方案') }
+    return undefined
+  },
+}
+apply(verifyCtx, { dir, outputDir: join(dir, 'verify-output'), metricsDir: join(dir, 'verify-metrics'), cleanupEnabled: false, docGuardEnabled: false })
+const verifyPre = verifyHandlers.get('tools/pre-execute')[0]
+let verifyCallSeq = 0
+const vExec = (name, args = {}) => ({ name, callId: `call-v-${name}-${++verifyCallSeq}`, arguments: args, agent: { id: 'session-v', session: { id: 'session-v' } } })
+const allow = async () => ({ kind: 'allow' })
+const writeDenied = await verifyPre(vExec('write', { path: 'SPEC.md' }), allow)
+assert.equal(writeDenied.kind, 'deny')
+assert.match(writeDenied.reason, /verify-mode/)
+const editDenied = await verifyPre(vExec('edit', { path: 'SPEC.md' }), allow)
+assert.equal(editDenied.kind, 'deny')
+const installDenied = await verifyPre(vExec('bash', { command: 'npm install --no-save' }), allow)
+assert.equal(installDenied.kind, 'deny')
+const commitDenied = await verifyPre(vExec('bash', { command: 'git commit -m x' }), allow)
+assert.equal(commitDenied.kind, 'deny')
+assert.equal((await verifyPre(vExec('bash', { command: 'npm test' }), allow)).kind, 'allow')
+// 计数单独用干净会话，避免被前面的 deny 影响步数
+let countSeq = 0
+const cExec = (args = {}) => ({ name: 'bash', callId: `call-c-${++countSeq}`, arguments: args, agent: { id: 'session-cnt', session: { id: 'session-cnt' } } })
+const actions = []
+for (let i = 0; i < 25; i++) actions.push((await verifyPre(cExec({ command: 'echo ok' }), allow)).kind)
+assert.ok(actions.includes('ask'), `第 25 次应提醒，实际 ${actions.join(',')}`)
+let verifyDeny = null
+for (let i = 0; i < 15; i++) verifyDeny = await verifyPre(cExec({ command: 'echo ok' }), allow)
+assert.equal(verifyDeny.kind, 'deny')
+assert.match(verifyDeny.reason, /40/)
+// 非核验会话（D:）：同样的调用量仍按全局 80/160 放行
+let dSeq = 0
+const dExec = (name, args = {}) => ({ name, callId: `call-d-${name}-${++dSeq}`, arguments: args, agent: { id: 'session-d', session: { id: 'session-d' } } })
+for (let i = 0; i < 25; i++) assert.equal((await verifyPre(dExec('bash', { command: 'echo ok' }), allow)).kind, 'allow')
+assert.equal((await verifyPre(dExec('write', { path: 'SPEC.md' }), allow)).kind, 'allow')
+
+// 派单去重：同快照第二次 deny，verify-again 放行
+const dispatchPrompt = '只读核验，快照：deadbee；不要改文件'
+assert.equal((await verifyPre(dExec('subagent', { prompt: dispatchPrompt }), allow)).kind, 'allow')
+const secondDispatch = await verifyPre(dExec('subagent', { prompt: dispatchPrompt }), allow)
+assert.equal(secondDispatch.kind, 'deny')
+assert.match(secondDispatch.reason, /dispatch-guard/)
+assert.equal((await verifyPre(dExec('subagent', { prompt: `${dispatchPrompt}\nverify-again` }), allow)).kind, 'allow')
 
 console.log('ok')
