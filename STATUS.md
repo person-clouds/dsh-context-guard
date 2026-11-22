@@ -55,6 +55,7 @@
 | 7 | 「始终允许」真实故障取证 | A 阶段已上线错误码提示；B 已补待放行项落盘与 `callId` 兜底（未取得真实故障原文，按最可能的 token 失效路径实现）；如再遇失败，记录提示/控制台原文以确认是否还有其它分支 |
 | 8 | 验证并发布默认放行配置外置 | 代码与文档已改；本会话 shell 不可用，需在 `/home/zh/www/dsh-context-guard` 跑 `npm test`、`npm pack --dry-run`（确认含 `config/risk-allow-default.json`），再在 `/home/zh/www` 跑 `./scripts/check.sh --repo dsh-context-guard`，通过后按 `PUBLISHING.md` 发布 |
 | 9 | 新描述上线 | `package.json` 描述与 README 已改，但 npm 页面要等下一次 `npm publish`（如 0.4.5）才更新；awesome-dsh-plugin 市场条目描述需另提 PR 更新。 |
+| 10 | 重启后回放链接检查 | 三轮核验的修复（同段动态参数、执行型 heredoc、`<<-`+CRLF、算术 `<<`、`ssh --`、`chroot` 选项、确认卡列出范围、`unverifiable-fetch`）只过了 `npm test` 离线回放；须在宿主终端重启 `dsh web` 后用真实命令回放一次，才能说「已生效」 |
 
 ## 验证记录
 
@@ -111,3 +112,4 @@
 | 2026-11-22 | `./scripts/check.sh --repo dsh-context-guard` | PASS（7 篇文档，0 项警告） |
 | 2026-11-22 | 修复链接检查误报（`PLAN-risk-link-scope`） | `analyzeCommand` 改为按 shell 段只对段首 `curl`/`wget`/`xdg-open` 等取链接，heredoc、引号内模式串与 Python `open(` 不再触发 `unknown-link`；`filterRiskByRules` 只统计可解析主机的 URL。回放：`329a0f0e` 的文档写入与 grep 模式命令 `risk=false`，`curl http://192.168.31.244:8095/` 由 host 规则放行，`curl http://evil.example/a` 仍确认；`npm test` ok |
 | 2026-11-22 | 修复核验发现的放行分支漏洞（`PLAN-risk-link-scope`） | 包装形式（`/usr/bin/curl`、`env -i`、`timeout -s KILL 5`、`sudo -u`、子 shell、`for … do`、`bash -lc`）恢复识别；`filterRiskByRules` 改用 `extractFetchUrls` 且动态主机段（`$PORT`）不静默放行；heredoc 正文剥离；`HTTP://` 计入 `insecure-http`；host 规则强制非空主机名。二轮核验再修 4 个 P1：白名单 URL 连带放行无字面链接的 fetch 段、authority 内反引号地址漏报、执行型 heredoc（`bash <<EOF`、`… <<EOF | bash`）正文被误剥、host 规则从 grep 模式串落库；放行语义收紧为「不能证明每条会执行的 fetch 都在白名单内就保持原判」，并补 `eval`/`find -exec`/`env -S`/`chroot`/`ssh`/`watch`/`ksh`/`fish` 包装识别。另修自查发现的 3 处漏判：`ssh -p 22 host …` 取值选项挡住宿主命令、`find … -exec sh -c '…'` 因 token 化丢引号漏判、未加引号终止符的 heredoc 正文里 `$(…)` 命令替换会真执行却被剥掉；`test.mjs` 增回归断言覆盖上述形式，`npm test` ok |
+| 2026-11-22 | 三轮核验修复（`PLAN-risk-link-scope`，范围 C） | 2 个 fresh subagent 复核后再修：① 同一 fetch 段「字面链接 + 动态参数」此前只按字面 URL 放行，改为按段标 `dynamic`（`-H`/`-d`/`-o` 等取值选项里的 `$VAR` 不算）；② 执行型 heredoc 改结构化判定（`dash`/`env bash`/`busybox sh`/`ssh host 'bash -s'`/`source /dev/stdin`）；③ `<<-` 终止符带 CRLF 不闭合；④ `$((1 << n))`/`((…))` 位移运算符误判 heredoc；⑤ `ssh -- host` 偏移、补 `-E/-B/-I/-P`；⑥ `chroot --userspec/--groups` 与 `--`；⑦ 确认卡最多列 3 条未放行链接并标注总数，`ruleSpecsFor` 只为列出的链接写 host 规则；⑧ 最终 diff 复核补 `unverifiable-fetch`：`curl "$ENDPOINT"`、`wget -i urls.txt` 这类没有字面链接的 fetch 此前 `risk=false` 完全不询问，现改为确认且只落 command 规则（`xdg-open "$f"` 等本地打开不触发）。`test.mjs` 增 60 余条断言；`npm test` ok，变异抽检（动态段恒假/上限改 5/执行型 heredoc 关闭）均被测试抓到；`./scripts/check.sh --repo dsh-context-guard` PASS。**实机生效需重启 `dsh web`** |

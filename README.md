@@ -78,7 +78,7 @@ dsh --profile web --dump-config | grep -E "context-guard|maxOutputChars|tool-res
 本机（2026-11-22 起）按「完全权限 + 需要时弹审批」运行，靠两处配置配合，改完都要重启 `dsh-web`：
 
 - **权限预设**：`~/.dsh/profiles/web/cordis.patch.yml` 里 `permission` 插件的 `full-access-ask` 预设（`sandbox: danger-full-access` + `approval: ask`），并用 `defaultPreset: full-access-ask` 设为新会话默认。原来的 `danger-full-access` 是 `approval: never`，会让风险确认在毫秒内被自动拒绝，报 `the user rejected tool "bash"`。
-- **风险白名单**：`~/.dsh/context-guard/risk-allow.json` 里 `kind: "host"` 规则（与审批卡「始终允许」同一文件），增量叠加内置默认 `config/risk-allow-default.json`，例如 `192.168.31.244`、`100.84.98.28`、`zh-gem-r7.tailb6e152.ts.net`。host 规则只在一条命令里每条会执行的 fetch 都能证明主机在白名单内时才摘掉 `unknown-link`/`insecure-http`；主机段取不出来的 URL（占位符/模式串/运行期动态展开/非法端口）、整条命令没有可解析主机、以及存在看不到字面链接的 fetch 段（`curl "$ENDPOINT"`、`… | xargs curl`）时都保持原判，不静默放行。放行判定与分析判定用同一套「真实 fetch 段」提取：`grep` 模式串和文档型 heredoc 正文既不会污染主机集合，也不会被写成 host 规则。`RiskRuleStore` 只在进程启动时读一次，手工编辑后需重启。
+- **风险白名单**：`~/.dsh/context-guard/risk-allow.json` 里 `kind: "host"` 规则（与审批卡「始终允许」同一文件），增量叠加内置默认 `config/risk-allow-default.json`，例如 `192.168.31.244`、`100.84.98.28`、`zh-gem-r7.tailb6e152.ts.net`。host 规则只在一条命令里每条会执行的 fetch 都能证明主机在白名单内时才摘掉 `unknown-link`/`insecure-http`；主机段取不出来的 URL（占位符/模式串/运行期动态展开/非法端口）、整条命令没有可解析主机、以及存在看不到字面链接的 fetch 段（`curl "$ENDPOINT"`、`… | xargs curl`）、以及同一段里字面链接之外还带动态参数（`curl https://ok.example/ "$ENDPOINT"`，但 `-H`/`-d`/`-o` 这类取值选项里的 `$VAR` 不算）时都保持原判，不静默放行。放行判定与分析判定用同一套「真实 fetch 段」提取：`grep` 模式串和文档型 heredoc 正文既不会污染主机集合，也不会被写成 host 规则。确认卡最多列出 3 条未放行链接（更多时标注总数），点「始终允许」只给列出来的这些链接下发 host 规则，卡片看到什么就放宽什么。`RiskRuleStore` 只在进程启动时读一次，手工编辑后需重启。连字面链接都没有的 `curl`/`wget`（`curl "$ENDPOINT"`、`wget -i urls.txt`）按 `unverifiable-fetch` 直接确认：看不到主机就不写 host 规则，「始终允许」只记这一条命令。
 
 ## 输出预算
 
