@@ -19,7 +19,15 @@ import { cleanupOutputs } from './lib/cleanup.js'
 import { analyzeCommand, riskAskDecision } from './lib/risk.js'
 import { PendingRiskRules, RISK_RULE_ENDPOINT, RiskRuleStore, effectiveAllowHosts, filterRiskByRules, normalizeRuleReason, ruleSpecsFor } from './lib/risk-allow.js'
 import { lintCommand, lintDecision } from './lib/command-lint.js'
-import { TurnBudget } from './lib/turn-budget.js'
+import {
+  DEFAULT_HARD_MAX_COMPACTIONS,
+  DEFAULT_HARD_MAX_STEPS_PER_SESSION,
+  DEFAULT_HARD_MAX_STEPS_PER_TURN,
+  DEFAULT_MAX_COMPACTIONS,
+  DEFAULT_MAX_STEPS_PER_SESSION,
+  DEFAULT_MAX_STEPS_PER_TURN,
+  TurnBudget,
+} from './lib/turn-budget.js'
 import {
   DEFAULT_DISPATCH_OVERRIDE,
   DEFAULT_DISPATCH_WINDOW_MS,
@@ -242,6 +250,15 @@ function guardConfig(config) {
     hardMaxCallsPerTurn: Number(config.hardMaxCallsPerTurn) || 160,
     maxTurnOutputChars: Number(config.maxTurnOutputChars) || 40000,
     exhaustedOutputChars: Number(config.exhaustedOutputChars) || 800,
+    stepBudget: {
+      enabled: config.stepBudget?.enabled !== false,
+      maxStepsPerTurn: Number(config.stepBudget?.maxStepsPerTurn) || DEFAULT_MAX_STEPS_PER_TURN,
+      hardMaxStepsPerTurn: Number(config.stepBudget?.hardMaxStepsPerTurn) || DEFAULT_HARD_MAX_STEPS_PER_TURN,
+      maxStepsPerSession: Number(config.stepBudget?.maxStepsPerSession) || DEFAULT_MAX_STEPS_PER_SESSION,
+      hardMaxStepsPerSession: Number(config.stepBudget?.hardMaxStepsPerSession) || DEFAULT_HARD_MAX_STEPS_PER_SESSION,
+      maxCompactions: Number(config.stepBudget?.maxCompactions) || DEFAULT_MAX_COMPACTIONS,
+      hardMaxCompactions: Number(config.stepBudget?.hardMaxCompactions) || DEFAULT_HARD_MAX_COMPACTIONS,
+    },
     sessionBudgets: Array.isArray(config.sessionBudgets) ? config.sessionBudgets : DEFAULT_SESSION_BUDGETS,
     sessionTitleTtlMs: Number(config.sessionTitleTtlMs) || 5000,
     dispatchGuard: {
@@ -402,6 +419,64 @@ function callLimitDenyDecision(check) {
   return {
     kind: 'deny',
     reason: `context-guard call-limit: 本轮 bash 调用 ${check.count} 次（session step ${stepLabel(check.step, 'zh')}），达到 ${check.hardMaxCallsPerTurn} 次硬上限；请拆任务或先汇报进展。 ${HARD_LIMIT_DRAFT_MARKER}`,
+  }
+}
+
+function stepAskDecision(check) {
+  const bySession = check.scope === 'session'
+  const count = bySession ? check.sessionSteps : check.steps
+  const soft = bySession ? check.maxStepsPerSession : check.maxStepsPerTurn
+  const hard = bySession ? check.hardMaxStepsPerSession : check.hardMaxStepsPerTurn
+  const scopeZh = bySession ? '本会话累计' : '本轮'
+  const scopeEn = bySession ? 'this session' : 'this turn'
+  return {
+    kind: 'ask',
+    reason: `context-guard step-budget: ${scopeZh} ${count} 步，达到提醒点 ${soft}（硬线 ${hard}）；是否继续？建议先写「已完成 / 未完成 / 下一步」再决定是否继续取证。`,
+    displayReason: {
+      en: `context-guard step-budget: ${scopeEn} reached ${count} steps (reminder at ${soft}, hard deny at ${hard}). Continue? Write "done / todo / next" first, then decide whether more evidence is worth the cost.`,
+      zh: `${scopeZh} ${count} 步，达到提醒点 ${soft}（硬线 ${hard}）。建议先收敛：已完成 / 未完成 / 下一步，再决定是否继续取证。`,
+    },
+  }
+}
+
+function stepDenyDecision(check) {
+  if (check.scope === 'session') {
+    const reason = `context-guard step-budget: 本会话累计 ${check.sessionSteps} 步，达到会话硬线 ${check.hardMaxStepsPerSession}；后续工具调用已拒绝。请在最终回复写 3 行交接（已完成 / 未完成 / 下一步），然后新开会话继续。`
+    return {
+      kind: 'deny',
+      reason,
+      displayReason: {
+        en: `context-guard step-budget: this session reached ${check.sessionSteps} steps (session hard deny at ${check.hardMaxStepsPerSession}); further tool calls are blocked. Write a 3-line handover (done / todo / next) in your final reply, then continue in a new session.`,
+        zh: `本会话累计 ${check.sessionSteps} 步，达到会话硬线 ${check.hardMaxStepsPerSession}，后续工具调用已拒绝。请在最终回复写 3 行交接（已完成 / 未完成 / 下一步），再新开会话继续；本会话不会自动续跑。`,
+      },
+    }
+  }
+  return {
+    kind: 'deny',
+    reason: `context-guard step-budget: 本轮 ${check.steps} 步，达到单回合硬线 ${check.hardMaxStepsPerTurn}；请拆任务或先汇报进展。 ${HARD_LIMIT_DRAFT_MARKER}`,
+  }
+}
+
+function compactionAskDecision(check) {
+  return {
+    kind: 'ask',
+    reason: `context-guard step-budget: 本会话已压缩 ${check.compactions} 次（提醒点 ${check.maxCompactions}），上下文已反复重建；是否继续？建议先收敛结论或写交接。`,
+    displayReason: {
+      en: `context-guard step-budget: this session has compacted ${check.compactions} time(s) (reminder at ${check.maxCompactions}); context keeps being rebuilt. Continue, or consolidate the conclusion / hand over instead?`,
+      zh: `本会话已压缩 ${check.compactions} 次（提醒点 ${check.maxCompactions}）。建议先收敛结论：已完成 / 未完成 / 下一步，再决定是否继续工具取证。`,
+    },
+  }
+}
+
+function compactionDenyDecision(check) {
+  const reason = `context-guard step-budget: 本会话已压缩 ${check.compactions} 次，达到硬线 ${check.hardMaxCompactions}；后续工具调用已拒绝。请在最终回复写 3 行交接（已完成 / 未完成 / 下一步），然后新开会话继续。`
+  return {
+    kind: 'deny',
+    reason,
+    displayReason: {
+      en: `context-guard step-budget: this session compacted ${check.compactions} times (hard deny at ${check.hardMaxCompactions}); further tool calls are blocked. Write a 3-line handover (done / todo / next) in your final reply, then continue in a new session.`,
+      zh: `本会话已压缩 ${check.compactions} 次，达到硬线 ${check.hardMaxCompactions}，后续工具调用已拒绝。请在最终回复写 3 行交接（已完成 / 未完成 / 下一步），再新开会话继续；本会话不会自动续跑。`,
+    },
   }
 }
 
@@ -727,6 +802,12 @@ export function apply(ctx, config = {}) {
     hardMaxCallsPerTurn: cfg.hardMaxCallsPerTurn,
     maxTurnOutputChars: cfg.maxTurnOutputChars,
     exhaustedOutputChars: cfg.exhaustedOutputChars,
+    maxStepsPerTurn: cfg.stepBudget.maxStepsPerTurn,
+    hardMaxStepsPerTurn: cfg.stepBudget.hardMaxStepsPerTurn,
+    maxStepsPerSession: cfg.stepBudget.maxStepsPerSession,
+    hardMaxStepsPerSession: cfg.stepBudget.hardMaxStepsPerSession,
+    maxCompactions: cfg.stepBudget.maxCompactions,
+    hardMaxCompactions: cfg.stepBudget.hardMaxCompactions,
     budgetFor: sessionId => {
       const title = titleCache.read(sessionId)
       return title === undefined ? null : matchBudget(budgetRules, title)
@@ -754,6 +835,12 @@ export function apply(ctx, config = {}) {
     }
     if (event.type !== 'compaction/summary') return
     const summary = textOf(event.data?.summary)
+    const compaction = turnBudget.noteCompaction(session?.id || 'unknown-session')
+    if (compaction.action !== 'allow') {
+      ctx.logger?.warn?.('context-guard: 本会话压缩 %s 次（提醒点 %s / 硬线 %s），%s', compaction.compactions,
+        compaction.maxCompactions, compaction.hardMaxCompactions,
+        compaction.action === 'deny' ? '后续工具调用将被拒绝' : '建议先收敛结论')
+    }
     void writeArchive(session, '压缩完成', summary, {
       trigger: event.data?.sourceCommandId ? 'manual' : 'automatic',
       shadowedTokenCount: event.data?.shadowedTokenCount,
@@ -766,6 +853,24 @@ export function apply(ctx, config = {}) {
     const decision = await next()
     if (decision.kind !== 'allow') return decision
     if (!cfg.enabled) return decision
+
+    // 步数/压缩门禁最先判定：压缩硬线与会话硬线只允许收尾交接，不再放行任何工具。
+    const asks = []
+    if (cfg.stepBudget.enabled) {
+      const budgetSession = sessionIdOf(exec)
+      const compaction = turnBudget.checkCompaction(budgetSession)
+      if (compaction.action === 'deny') {
+        ctx.logger?.info?.('context-guard: 会话压缩硬线拦截: %s', budgetSession)
+        return compactionDenyDecision(compaction)
+      }
+      if (compaction.action === 'ask') asks.push(compactionAskDecision(compaction))
+      const step = turnBudget.checkStep(budgetSession)
+      if (step.action === 'deny') {
+        ctx.logger?.info?.('context-guard: %s步数硬线拦截: %s', step.scope === 'session' ? '会话' : '回合', budgetSession)
+        return stepDenyDecision(step)
+      }
+      if (step.action === 'ask') asks.push(stepAskDecision(step))
+    }
 
     // 派单去重：只有 prompt 声明了「快照：<sha>」才参与，普通子任务不受影响。
     if (cfg.dispatchGuard.enabled && cfg.dispatchTools.includes(exec?.name)) {
@@ -791,13 +896,12 @@ export function apply(ctx, config = {}) {
     const command = commandOf(exec) || (exec?.name === 'web_fetch' && typeof exec?.arguments?.url === 'string'
       ? `curl ${exec.arguments.url}`
       : '')
-    if (!command) return decision
+    if (!command) return asks.length > 0 ? mergeAskDecisions(asks) : decision
     if (rule && rule.denyCommandRes.some(re => re.test(command))) {
       ctx.logger?.info?.('context-guard: 核验态拦截破坏性命令: %s', sessionIdOf(exec))
       return verifyDenyCommandDecision(rule, command)
     }
 
-    const asks = []
     // 临时清理规则按 cwd 生效：与 docGuard 一样优先取工具参数里的工作目录。
     const riskCwd = exec?.arguments?.cwd || exec?.arguments?.workdir || exec?.cwd || undefined
     if (cfg.riskCheckEnabled && cfg.riskToolNames.includes(exec?.name)) {

@@ -100,6 +100,9 @@ Unbounded commands (`cat`, `journalctl` without `--since`/`-n`, `find /`, `du /`
 ## Per-turn gates and command hints
 
 - **Call gate**: the 80th bash call in a turn returns one `ask`; the 160th and later are denied. Denies carry the marker `context-guard:hard-limit-draft`; the Web client fills an **empty** composer with `继续` (never sends automatically — press Enter; at most 3 fills per session and 1 per turn, also restored when the event is within the last 30 minutes; Desktop/TUI silently falls back). `turn/start` resets counters; if that event is missing the plugin falls back to per-session counting and logs a warning. Messages show both the turn's bash-call count and the current `session step`, which are different counters.
+- **Step gate**: steps are counted from `step/start` events (multiple tool calls inside one step count once). The 30th step in a turn and the 60th session-cumulative step each return one `ask`; the 40th / 90th step are denied. Each `ask` fires only once per turn and per session. Without `step/start` events the plugin falls back to counting tool calls (results flagged `approx`). A turn deny keeps the `context-guard:hard-limit-draft` marker so Enter can continue one more turn; session and compaction denies omit it and only ask for a 3-line handover (done / todo / next) before a new session.
+- **Compaction gate**: the 1st `compaction/summary` returns `ask`, the 2nd and later are denied, preventing endless compact-and-continue sessions.
+- **Verify sessions**: in `V：` sessions the per-turn step limits tighten to 25 (reminder) / 40 (deny); session and compaction limits stay at the global 60 / 90 and 1 / 2.
 - **Output gate**: after actual emitted context exceeds `maxTurnOutputChars=40000` in a turn, later results over `exhaustedOutputChars=800` are fully archived while the context receives at most 800 characters plus the path.
 - **Command enforcement**: `commandLintMode: deny` by default. Whole-file `cat` points to the active file-read tool (`ops_inspect_local_file({ path, offset, limit })` or `read`) or `sed -n '1,120p'`; unscoped recursive search points to `ops_grep`/`grep` or `--glob '!**/node_modules/**'`; bare `curl .../api/...` points to `| jq '{field1,field2}'` or `-o /tmp/out.json` followed by a query.
 - DSH does not allow `tools/pre-execute` to rewrite tool arguments, so the plugin denies the current call and puts the replacement in the model-visible `reason`; the model retries with a bounded call.
@@ -246,6 +249,14 @@ bash dsh-context-guard/scripts/apply-compaction.sh apply     # back up, rewrite 
         hardMaxCallsPerTurn: 160         # hard deny + auto-fill "continue" at call 160
         maxTurnOutputChars: 40000
         exhaustedOutputChars: 800
+        stepBudget:                      # step & compaction gates; enabled: false turns them off
+          enabled: true
+          maxStepsPerTurn: 30            # per-turn reminder
+          hardMaxStepsPerTurn: 40        # per-turn hard deny
+          maxStepsPerSession: 60         # session-cumulative reminder
+          hardMaxStepsPerSession: 90     # session-cumulative hard deny
+          maxCompactions: 1              # reminder after the 1st compaction
+          hardMaxCompactions: 2          # hard deny from the 2nd compaction
         # sessionBudgets: replaces the default rules; see "Verify mode"; V: sessions default to 25/40/20000
         # dispatchGuard: {enabled: true, windowMs: 7200000, overrideToken: verify-again}
         commandLintEnabled: true

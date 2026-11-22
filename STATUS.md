@@ -1,9 +1,20 @@
 # STATUS — dsh-context-guard
 
 - 版本：`0.5.0`（本地已就绪，待发布；`npm publish` 需用户 2FA）
-- 更新时间：2026-11-22
+- 更新时间：2026-11-23
 - 一句话：DSH 工具输出预算/落盘、去重、单轮调用/输出门禁、硬上限后 Web 自动填入「继续」、命令形态拦截、风险确认与窄规则自动放行（含按 cwd 的 `.tmp*` 清理与命令范围）、内置放行默认值外置、只读诊断、压缩归档与指标。
 - 位置：`dsh-context-guard/`；web profile 已按 link 加载并完成「始终允许」实机验证，superagent profile 待重启后核对。
+
+## 2026-11-23 新增步数与压缩门禁
+
+- [x] `lib/turn-budget.js` 新增步数/压缩计数：单回合 30 提醒 / 40 拒绝、会话累计 60 / 90、压缩 1 / 2，`ask` 每回合与每会话只触发一次；
+- [x] 计步以 `step/start` 事件为准（同一 step 多次工具调用算 1 步）；无该事件时退化为按工具调用近似计步并标 `approx`；
+- [x] 回合硬拒保留 `context-guard:hard-limit-draft`（可按 Enter 续一轮）；会话硬拒与压缩硬拒不带该标记，改为要求 3 行交接（已完成 / 未完成 / 下一步）后新开会话；
+- [x] `lib/verify-mode.js`：`V：` 会话单回合步数收紧到 25 / 40，会话与压缩阈值沿用全局；
+- [x] `index.js`：新增 `stepBudget` 配置（默认开启）、步数/压缩决策与合并；非命令类工具（`read`/`grep`/`subagent` 等）也会收到步数提醒；
+- [x] `test.mjs` 增加单元与端到端用例：29/30/40、59/60/90、压缩 0/1/2、V 会话 25/40、无事件近似计步、`stepBudget.enabled=false` 全关；
+- [x] `README.md`、`README.en.md`、`SPEC.md` 同步；
+- [ ] 待验证：装载新配置需用户执行 `dsh-context-guard/scripts/apply-profile.sh` 并重启 `dsh web` 后复核阈值。
 
 ## 已完成
 

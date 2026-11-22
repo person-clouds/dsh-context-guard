@@ -72,7 +72,83 @@ assert.equal(fallbackBudget.checkCall('fallback-session').action, 'allow')
 assert.equal(fallbackBudget.checkCall('fallback-session').action, 'allow')
 assert.equal(turnWarnings.length, 1)
 
-// 命令形态提示
+// 步数/压缩门禁：回合 30/40、会话 60/90、压缩 1/2；提醒只报一次，硬线顺序为先回合后会话
+const stepBudget = new TurnBudget({ logger: { warn() {} } })
+stepBudget.startTurn('steps', 1)
+for (let i = 1; i <= 29; i++) {
+  stepBudget.noteStep('steps', i)
+  assert.equal(stepBudget.checkStep('steps').action, 'allow', `第 ${i} 步不应提醒`)
+}
+stepBudget.noteStep('steps', 30)
+const unitStepAsk30 = stepBudget.checkStep('steps')
+assert.equal(unitStepAsk30.action, 'ask')
+assert.equal(unitStepAsk30.scope, 'turn')
+assert.equal(unitStepAsk30.steps, 30)
+assert.equal(unitStepAsk30.maxStepsPerTurn, 30)
+assert.equal(stepBudget.checkStep('steps').action, 'allow', '提醒后同回合不重复')
+for (let i = 31; i <= 39; i++) {
+  stepBudget.noteStep('steps', i)
+  assert.equal(stepBudget.checkStep('steps').action, 'allow', `第 ${i} 步不应拒绝`)
+}
+stepBudget.noteStep('steps', 40)
+const unitStepDeny40 = stepBudget.checkStep('steps')
+assert.equal(unitStepDeny40.action, 'deny')
+assert.equal(unitStepDeny40.scope, 'turn')
+assert.equal(unitStepDeny40.hardMaxStepsPerTurn, 40)
+// 新回合清零回合步数，但会话步数继续累计：第 60 步会话提醒、第 70 步回合提醒、第 90 步会话拒
+stepBudget.startTurn('steps', 2)
+for (let i = 41; i <= 59; i++) {
+  stepBudget.noteStep('steps', i)
+  assert.equal(stepBudget.checkStep('steps').action, 'allow', `会话第 ${i} 步不应提醒`)
+}
+stepBudget.noteStep('steps', 60)
+const unitSessionAsk60 = stepBudget.checkStep('steps')
+assert.equal(unitSessionAsk60.action, 'ask')
+assert.equal(unitSessionAsk60.scope, 'session')
+assert.equal(unitSessionAsk60.sessionSteps, 60)
+assert.equal(unitSessionAsk60.maxStepsPerSession, 60)
+for (let i = 61; i <= 69; i++) {
+  stepBudget.noteStep('steps', i)
+  assert.equal(stepBudget.checkStep('steps').action, 'allow', `会话第 ${i} 步不应拒绝`)
+}
+stepBudget.noteStep('steps', 70)
+assert.equal(stepBudget.checkStep('steps').scope, 'turn', '第 70 步回到回合提醒')
+for (let i = 71; i <= 79; i++) {
+  stepBudget.noteStep('steps', i)
+  assert.equal(stepBudget.checkStep('steps').action, 'allow', `会话第 ${i} 步不应拒绝`)
+}
+stepBudget.noteStep('steps', 80)
+assert.equal(stepBudget.checkStep('steps').scope, 'turn', '第 80 步回合硬拒')
+stepBudget.startTurn('steps', 3)
+for (let i = 81; i <= 89; i++) {
+  stepBudget.noteStep('steps', i)
+  assert.equal(stepBudget.checkStep('steps').action, 'allow', `会话第 ${i} 步不应拒绝`)
+}
+stepBudget.noteStep('steps', 90)
+const unitSessionDeny90 = stepBudget.checkStep('steps')
+assert.equal(unitSessionDeny90.action, 'deny')
+assert.equal(unitSessionDeny90.scope, 'session')
+assert.equal(unitSessionDeny90.hardMaxStepsPerSession, 90)
+// 无 step/start 事件时退化为按工具调用计步
+const fallbackSteps = new TurnBudget({ logger: { warn() {} } })
+for (let i = 1; i <= 29; i++) assert.equal(fallbackSteps.checkStep('fallback-steps').action, 'allow')
+const fallbackAsk = fallbackSteps.checkStep('fallback-steps')
+assert.equal(fallbackAsk.action, 'ask')
+assert.equal(fallbackAsk.approx, true)
+for (let i = 31; i <= 39; i++) assert.equal(fallbackSteps.checkStep('fallback-steps').action, 'allow')
+assert.equal(fallbackSteps.checkStep('fallback-steps').action, 'deny')
+// 压缩门禁：0 次放行、第 1 次提醒、第 2 次拒绝
+const compactionBudget = new TurnBudget({ logger: { warn() {} } })
+assert.equal(compactionBudget.checkCompaction('compact').action, 'allow')
+assert.equal(compactionBudget.checkCompaction('compact').compactions, 0)
+assert.equal(compactionBudget.noteCompaction('compact').action, 'ask')
+assert.equal(compactionBudget.checkCompaction('compact').action, 'ask')
+assert.equal(compactionBudget.checkCompaction('compact').action, 'allow', '提醒后不重复')
+assert.equal(compactionBudget.noteCompaction('compact').action, 'deny')
+const compactionDeny = compactionBudget.checkCompaction('compact')
+assert.equal(compactionDeny.action, 'deny')
+assert.equal(compactionDeny.hardMaxCompactions, 2)
+
 const catLint = lintCommand('cat ~/.dsh/profiles/web/cordis.patch.yml')
 assert.equal(catLint.hit, true)
 assert.equal(catLint.reasons[0].code, 'whole-file-cat')
@@ -1473,6 +1549,8 @@ for (const name of ['write', 'edit', 'ops_write_file', 'ops_edit_file', 'ops_rep
 }
 // 标题契约：`V：` 覆盖 /V 与 /VP，手动改名同样生效；D/G 不得误命中。
 assert.equal(matchBudget(verifyRules, 'V: 核验 diff')?.maxCallsPerTurn, 25)
+assert.equal(matchBudget(verifyRules, 'V: 核验 diff')?.maxStepsPerTurn, 25)
+assert.equal(matchBudget(verifyRules, 'V: 核验 diff')?.hardMaxStepsPerTurn, 40)
 assert.equal(matchBudget(verifyRules, 'TODO：V: 核验 diff')?.hardMaxCallsPerTurn, 40)
 assert.equal(matchBudget(verifyRules, 'V：核验 diff')?.maxCallsPerTurn, 25)
 assert.equal(matchBudget(verifyRules, 'V：计划：发布对齐')?.maxCallsPerTurn, 25)
@@ -1525,7 +1603,7 @@ const verifyCtx = {
   },
   logger: { warn() {}, info() {} },
   get(name) {
-    if (name === 'sessionTitle') return { get: session => (session && ['session-v', 'session-cnt'].includes(session.id) ? `V: 核验 ${session.id}` : 'D: 讨论方案') }
+    if (name === 'sessionTitle') return { get: session => (session && ['session-v', 'session-cnt', 'session-step-v'].includes(session.id) ? `V: 核验 ${session.id}` : 'D: 讨论方案') }
     return undefined
   },
 }
@@ -1567,6 +1645,97 @@ const secondDispatch = await verifyPre(dExec('subagent', { prompt: dispatchPromp
 assert.equal(secondDispatch.kind, 'deny')
 assert.match(secondDispatch.reason, /dispatch-guard/)
 assert.equal((await verifyPre(dExec('subagent', { prompt: `${dispatchPrompt}\nverify-again` }), allow)).kind, 'allow')
+
+// 步数门禁端到端：V: 第 25 步提醒；普通会话回合 40 步硬拒（保留自动继续）、会话 60 提醒 / 90 硬拒（不自动继续）
+const sessionEvent = verifyHandlers.get('session/event')[0]
+let stepSeq = 0
+const rExec = (sessionId, name = 'read', args = { path: 'SPEC.md' }) => ({
+  name,
+  callId: `call-step-${++stepSeq}`,
+  arguments: args,
+  agent: { id: sessionId, session: { id: sessionId } },
+})
+await sessionEvent({ id: 'session-step-v' }, { type: 'turn/start', data: { turn: 1 } })
+for (let i = 1; i <= 24; i++) {
+  await sessionEvent({ id: 'session-step-v' }, { type: 'step/start', data: { step: i } })
+  assert.equal((await verifyPre(rExec('session-step-v'), allow)).kind, 'allow', `V 第 ${i} 步应放行`)
+}
+await sessionEvent({ id: 'session-step-v' }, { type: 'step/start', data: { step: 25 } })
+const vStepAsk = await verifyPre(rExec('session-step-v'), allow)
+assert.equal(vStepAsk.kind, 'ask')
+assert.match(vStepAsk.reason, /step-budget/)
+assert.match(vStepAsk.reason, /25/)
+for (let i = 26; i <= 39; i++) {
+  await sessionEvent({ id: 'session-step-v' }, { type: 'step/start', data: { step: i } })
+  assert.equal((await verifyPre(rExec('session-step-v'), allow)).kind, 'allow', `V 第 ${i} 步应放行`)
+}
+await sessionEvent({ id: 'session-step-v' }, { type: 'step/start', data: { step: 40 } })
+const vStepDeny = await verifyPre(rExec('session-step-v'), allow)
+assert.equal(vStepDeny.kind, 'deny')
+assert.match(vStepDeny.reason, /单回合硬线/)
+assert.ok(vStepDeny.reason.includes(HARD_LIMIT_DRAFT_MARKER), '回合硬线保留自动「继续」')
+// 普通会话：第 40 步回合硬拒
+await sessionEvent({ id: 'session-step' }, { type: 'turn/start', data: { turn: 1 } })
+for (let i = 1; i <= 39; i++) {
+  await sessionEvent({ id: 'session-step' }, { type: 'step/start', data: { step: i } })
+  const expected = i === 30 ? 'ask' : 'allow'
+  assert.equal((await verifyPre(rExec('session-step'), allow)).kind, expected, `第 ${i} 步应为 ${expected}`)
+}
+await sessionEvent({ id: 'session-step' }, { type: 'step/start', data: { step: 40 } })
+const turnStepDeny = await verifyPre(rExec('session-step'), allow)
+assert.equal(turnStepDeny.kind, 'deny')
+assert.match(turnStepDeny.reason, /单回合硬线/)
+assert.ok(turnStepDeny.reason.includes(HARD_LIMIT_DRAFT_MARKER))
+// 换回合后会话步数累计：第 60 步提醒、第 90 步硬拒；会话硬线不写自动「继续」标记
+await sessionEvent({ id: 'session-step' }, { type: 'turn/start', data: { turn: 2 } })
+for (let i = 41; i <= 59; i++) {
+  await sessionEvent({ id: 'session-step' }, { type: 'step/start', data: { step: i } })
+  assert.equal((await verifyPre(rExec('session-step'), allow)).kind, 'allow', `会话第 ${i} 步应放行`)
+}
+await sessionEvent({ id: 'session-step' }, { type: 'step/start', data: { step: 60 } })
+const sessionStepAsk = await verifyPre(rExec('session-step'), allow)
+assert.equal(sessionStepAsk.kind, 'ask')
+assert.match(sessionStepAsk.reason, /本会话累计/)
+await sessionEvent({ id: 'session-step' }, { type: 'turn/start', data: { turn: 3 } })
+for (let i = 61; i <= 89; i++) {
+  await sessionEvent({ id: 'session-step' }, { type: 'step/start', data: { step: i } })
+  assert.equal((await verifyPre(rExec('session-step'), allow)).kind, 'allow', `会话第 ${i} 步应放行`)
+}
+await sessionEvent({ id: 'session-step' }, { type: 'step/start', data: { step: 90 } })
+const sessionStepDeny = await verifyPre(rExec('session-step'), allow)
+assert.equal(sessionStepDeny.kind, 'deny')
+assert.match(sessionStepDeny.reason, /会话硬线/)
+assert.ok(!sessionStepDeny.reason.includes(HARD_LIMIT_DRAFT_MARKER), '会话硬线不得自动续跑')
+
+// 压缩门禁端到端：第 1 次提醒、第 2 次硬拒；硬拒不写自动「继续」标记
+const compactSession = { id: 'session-compact', header: {}, snapshotEvents: () => [] }
+await sessionEvent(compactSession, { type: 'compaction/summary', data: { summary: [{ type: 'text', text: '第一次摘要' }] } })
+const compactAskE2e = await verifyPre(rExec('session-compact'), allow)
+assert.equal(compactAskE2e.kind, 'ask')
+assert.match(compactAskE2e.reason, /已压缩 1 次/)
+await sessionEvent(compactSession, { type: 'compaction/summary', data: { summary: [{ type: 'text', text: '第二次摘要' }] } })
+const compactDenyE2e = await verifyPre(rExec('session-compact'), allow)
+assert.equal(compactDenyE2e.kind, 'deny')
+assert.match(compactDenyE2e.reason, /已压缩 2 次/)
+assert.ok(!compactDenyE2e.reason.includes(HARD_LIMIT_DRAFT_MARKER), '压缩硬线不得自动续跑')
+
+// stepBudget.enabled=false 时步数/压缩门禁整体关闭
+const offHandlers = new Map()
+const offCtx = {
+  on(type, fn) {
+    if (!offHandlers.has(type)) offHandlers.set(type, [])
+    offHandlers.get(type).push(fn)
+  },
+  logger: { warn() {}, info() {} },
+  get() { return undefined },
+}
+apply(offCtx, { dir, outputDir: join(dir, 'off-output'), metricsDir: join(dir, 'off-metrics'), cleanupEnabled: false, docGuardEnabled: false, stepBudget: { enabled: false } })
+const offPre = offHandlers.get('tools/pre-execute')[0]
+let offSeq = 0
+const offExec = () => ({ name: 'read', callId: `call-off-${++offSeq}`, arguments: { path: 'x' }, agent: { id: 'session-off', session: { id: 'session-off' } } })
+for (let i = 0; i < 45; i++) assert.equal((await offPre(offExec(), allow)).kind, 'allow', '关闭后连续 45 步仍放行')
+for (let i = 0; i < 3; i++) await offHandlers.get('session/event')[0]({ id: 'session-off', header: {}, snapshotEvents: () => [] }, { type: 'compaction/summary', data: { summary: [{ type: 'text', text: `摘要${i}` }] } })
+assert.equal((await offPre(offExec(), allow)).kind, 'allow', '关闭后多次压缩仍放行')
 
 // ---- 风险放行规则收口：URL 尾部归一、host 校验、cwd 临时清理、命令范围 ----
 // 尾部标点/未配对右括号不进主机，括号成对的路径完整保留
