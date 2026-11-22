@@ -1,7 +1,7 @@
 ---
 implementation_status: done
 created_at: 2026-11-22 14:35:30
-updated_at: 2026-11-22 15:40:00
+updated_at: 2026-11-22 15:58:00
 ---
 
 # PLAN：链接检查限定到真实 fetch 段，放行只认可证明的 fetch
@@ -51,3 +51,4 @@ updated_at: 2026-11-22 15:40:00
 - 2026-11-22 14:37 同步 README、README.en、STATUS，回放真实命令验证。
 - 2026-11-22 15:20 交付前核验发现放行分支自身漏洞并修复：前缀/子 shell/路径包装（`/usr/bin/curl`、`env -i`、`timeout -s KILL 5`、`sudo -u`、`(curl …)`、`{ curl …; }`、`for … do curl`、`bash -lc`、`nice`/`stdbuf`/`busybox`、`$(…)` 命令替换）恢复识别；放行判定改用 `extractFetchUrls` 并对动态主机段保持原判；heredoc 正文剥离（引号内 `<<EOF` 不算）；`HTTP://` 计入明文；host 规则校验主机名非空。`test.mjs` 增回归断言覆盖上述形式，`npm test` 通过。
 - 2026-11-22 15:40 二轮核验（fresh subagent 只看 diff）再发现 4 个 P1：白名单 URL 连带放行无字面链接的 fetch 段、authority 里的反引号地址漏报、执行型 heredoc（`bash <<EOF`、`… <<EOF | bash`）正文被误当文档剥掉、host 规则从 grep 模式串落库。修复：新增 `fetchSites`/`hasOpaqueFetch` 与 `eval`/`find -exec`/`env -S`/`chroot`/`ssh`/`watch`/`ksh`/`fish` 识别，heredoc 解析改为跨行引号状态 + 注释感知 + 精确终止符（仅 `<<-` 接受前导 tab）并保留执行型正文，`commandSubstitutions` 跳过注释，`extractUrls` 允许反引号，`ruleSpecsFor` 改用 `extractFetchUrls`；放行语义由「不可解析主机不参与」改为「不可证明就不放行」。`test.mjs` 同步回归断言，`npm test` 通过。
+- 2026-11-22 15:58 自查（L1 真实入口回放）再补 3 处漏判：`ssh` 带取值选项（`-p 22`）时主机偏移算错、`find -exec sh -c '…'` 因 token 化丢引号导致取不到链接、未加引号终止符的 heredoc 正文里命令替换会真执行却被整段剥掉（改为只从正文提取 `$(…)`/反引号）。加 `requoteTokens`/`sshCommandOffset`，`fetchSites` 支持整段单 token 递归并加深度上限。`test.mjs` 增断言，`npm test` 通过。

