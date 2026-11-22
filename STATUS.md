@@ -1,6 +1,6 @@
 # STATUS — dsh-context-guard
 
-- 更新时间：2026-11-21
+- 更新时间：2026-11-22
 - 一句话：DSH 工具输出预算/落盘、去重、单轮调用/输出门禁、硬上限后 Web 自动填入「继续」、命令形态拦截、风险确认与窄规则自动放行、内置放行默认值外置、只读诊断、压缩归档与指标。
 - 位置：`dsh-context-guard/`；web profile 已按 link 加载并完成「始终允许」实机验证，superagent profile 待重启后核对。
 
@@ -35,6 +35,7 @@
 - [x] `scripts/apply-profile.sh` 修复：检查 profile 已安装 scoped 包和失效的 `dsh-superagent` link；修正包名；删除顶层 `persistent-bash` 旧块，改为覆盖 minimal preset 的 `config.plugins` 并设 `maxOutputChars=65536`；`tool-result-pruner=6000/3000/1500`；重复执行幂等。
 - [x] 默认放行值外置：链接主机（`local`/`codeHosting`/`api`/`docs`/`techMedia` 五组 28 个）、`rm` 临时根与 test 目录、`~/opt` 开关、产物目录、写探测、`sudo`/`systemctl` 只读清单、git 只读子命令登记统一移入随包 `config/risk-allow-default.json`；`lib/default-allowlist.js` 负责读取、字段校验与规范化，配置缺失或非法时回退最小安全默认（仅 loopback 链接）并 warning；`DEFAULT_ALLOW_HOSTS` 与产物目录集合改由配置导出；`riskAllowHosts` 显式覆盖语义不变，用户 host 规则继续与内置并集；个人/内部域名不进内置。
 - [x] 中文 README 优先展示，补充英文 `README.en.md`；
+- [x] 中文/英文 README 开头新增「本机配置落点」：记录 `~/.dsh/profiles/web/cordis.patch.yml` 的 `full-access-ask` 预设（`danger-full-access` + `approval: ask`，替代会静默拒绝风险确认的 `approval: never`）与 `~/.dsh/context-guard/risk-allow.json` 的 host 规则（增量叠加内置默认、需重启加载）；本机另新增 `192.168.31.244`、`100.84.98.28` 两条 host 规则；
 - [x] linuxops 可选安装方案：不安装自动回退、插件只读兼容层、通过 `--binary` 接入自建/上游二进制；安装脚本不 sudo、不自动改 PATH；
 - [x] 修复「bash 全量报 `cannot get property "tools" without inject`」：`detectFileTools` 与 `registerCommandGuidance` 原先直接读 `ctx.tools`/`ctx.systemPrompt`，插件未声明 `inject` 时 cordis 代理在属性读取阶段即抛错，`tools/pre-execute` 的命令形态检查因此让所有 bash 调用失败（0.4.2 引入 `detectFileTools` 时回归）；改为优先 `ctx.get()`（无 inject 要求、取不到返回 `undefined`）并保留属性读取兜底且包在 `try` 中，同时修复命令提示段落一直未注册的问题；`test.mjs` 增加严格上下文（属性读取即抛）的单元与端到端回归用例。
 - [x] 修复替代命令提示指错工具：`tools/pre-execute` 里 `detectFileTools(ctx)` 没传 scope，取到的是全局视图，看不到按 agent 作用域注册的 `ops_*`，于是文案退化成官方 `read`/`grep`/`glob`（部分会话根本没有 `read`）；改为 `detectFileTools(ctx, exec?.agent)`，与系统提示段落拿到的 `scope` 保持一致；`test.mjs` 增加「全局视图只有 `read`、agent 视图有 `ops_*` 时 deny 文案必须是 `ops_inspect_local_file`」回归用例。
@@ -100,3 +101,4 @@
 | 2026-11-21 | tag `v0.4.4` | 已推送 `origin`；`gh` 未登录（`gh auth status` 无 host） |
 | 2026-11-21 | GitHub Release `v0.4.4` | ok；用 `GH_TOKEN=$(git credential fill ...)` 从 git credential helper 取 zhyfor PAT（token 未落盘、未打印），`gh release create` 成功；资产 `dsh-context-guard.tgz` 58586 字节，`releases/latest/download` 返回 200 |
 | 2026-11-21 | 实机验收（重启后） | `cat app.log` 被 deny，文案已是 `ops_inspect_local_file({ path, offset: 1, limit: 120 })`，说明 0.4.4 的 `exec.agent` 作用域修复生效；有界形式 `cat x \| head` 仍正常放行 |
+| 2026-11-22 | 实机验收（白名单 + 预设） | `dsh-web` 于 12:23:51 重启（规则文件 12:21 写入，34 条规则/30 条 host）；`curl http://192.168.31.244:8095/` 返回 200 且**未弹审批卡**，证明 host 规则由 `allowedBy: host` 摘掉 `unknown-link`/`insecure-http`；本会话切到 `ask` 后审批链路正常。离线回放 7 条历史被拒命令：4 条 curl-only 由有风险变 `none`，2 条含 `docker rm -f` 仍为 `container-delete`，1 条 `$p` 变量端口仍报 `unknown-link`（`new URL()` 解析不出主机名） |

@@ -21,6 +21,13 @@ DSH Host-only 插件：把长工具输出挡在上下文之外，同时保留完
 6. **只读诊断**：`scripts/inspect.sh` 用固定模式替代零散命令；
 7. **风险确认 + 压缩归档 + 指标 + 清理**：风险命令执行前确认；压缩前后写 `STATUS.md`，统计节省量，按保留期和配额清磁盘。
 
+## 本机配置落点
+
+本机（2026-11-22 起）按「完全权限 + 需要时弹审批」运行，靠两处配置配合，改完都要重启 `dsh-web` 才生效：
+
+- **权限预设**：`~/.dsh/profiles/web/cordis.patch.yml` 里 `permission` 插件的 `full-access-ask` 预设（`sandbox: danger-full-access` + `approval: ask`），并用 `defaultPreset: full-access-ask` 设为新会话默认。原来的 `danger-full-access` 是 `approval: never`，会让本插件的风险确认在毫秒内被自动拒绝，报 `the user rejected tool "bash"`。
+- **风险白名单**：`~/.dsh/context-guard/risk-allow.json` 里 `kind: "host"` 的规则（与审批卡「始终允许」写入的是同一文件），增量叠加内置默认 `config/risk-allow-default.json`，例如 `192.168.31.244`、`100.84.98.28`、`zh-gem-r7.tailb6e152.ts.net`。host 规则只在「一条命令里所有 URL 主机都在白名单内」时才摘掉 `unknown-link` / `insecure-http`；`RiskRuleStore` 只在进程启动时读一次，手工编辑后不重启不加载。
+
 ## 安装
 
 从 GitHub Release 安装（推荐，无需构建）：

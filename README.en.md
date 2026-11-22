@@ -21,6 +21,13 @@ The plugin provides seven safeguards:
 6. **Read-only diagnostics** — `scripts/inspect.sh` replaces ad-hoc commands with fixed, bounded patterns.
 7. **Risk confirmation + compaction archive + metrics + cleanup** — confirms risky commands, writes `STATUS.md` around compaction, records savings, and prunes by retention period and quota.
 
+## Local setup on this machine
+
+Since 2026-11-22 this host runs "full access, ask when needed", which relies on two pieces of configuration; both need a `dsh-web` restart to take effect:
+
+- **Permission preset** — in `~/.dsh/profiles/web/cordis.patch.yml`, the `permission` plugin's `full-access-ask` preset (`sandbox: danger-full-access` + `approval: ask`), selected as the default for new sessions via `defaultPreset: full-access-ask`. The stock `danger-full-access` preset uses `approval: never`, which auto-rejects this plugin's risk confirmations within milliseconds and reports `the user rejected tool "bash"`.
+- **Risk allowlist** — `kind: "host"` rules in `~/.dsh/context-guard/risk-allow.json` (the same file that approval cards write to on "always allow"), layered on top of the built-in defaults in `config/risk-allow-default.json`, e.g. `192.168.31.244`, `100.84.98.28`, `zh-gem-r7.tailb6e152.ts.net`. Host rules only strip `unknown-link` / `insecure-http` when every URL host in one command is allowlisted; `RiskRuleStore` reads the file only at process start, so manual edits do not apply without a restart.
+
 ## Install
 
 From a GitHub Release (recommended, no build step):
