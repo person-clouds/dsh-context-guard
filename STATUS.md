@@ -31,6 +31,7 @@
 - [x] 「始终允许」失败可见化：保存失败时页面右下角提示错误码与 HTTP 状态（如 `approval-rule-expired（HTTP 410）`）并写浏览器控制台；超过 2 秒先提示「仍在保存」、完成后提示结果，15 秒超时；失败不消耗审批，仍可「允许一次」；
 - [x] 「始终允许」填写原因：点击后先弹出原因输入框（必填、最多 200 字、压成单行），取消不保存也不消耗审批；原因随请求提交，Host 校验后再消费 token，缺原因返回 400 `reason-required`；原因作为规则标记 `reason` 写入 `risk-allow.json`，同一规则再次放行时覆盖为最新原因，`reason` 只用于复核、不参与匹配。
 - [x] 「始终允许」凭据失效修复：待放行项短期落盘为 `context-guard/risk-pending.json`（0600、TTL 10 分钟、最多 100 条），插件重载后同一 token 仍可消费；token 不在时按审批 `callId` 兜底，二者都没有才返回 410；落盘失败只 warning，不影响本次审批；规则仍只按安全类泛化。
+- [x] 已放行主机不再重复询问/落库：有效白名单 = 配置或内置默认 + 已保存 host 规则；审批卡与 `risk.links` 只列仍未放行的主机，「始终允许」只为这些主机写规则，已放行主机的 `reason`/`lastUsedAt` 不再被重复更新；`curl "$ENDPOINT"` 等不可证明 fetch 仍 `ask`。
 - [x] 命令形态拦截：整文件 `cat`、无排除的 `~/.dsh`/家目录递归搜索、裸 `curl` API 默认返回 `deny` 并给有界替代；替代命令与系统提示按当前工具面渲染文件工具（dsh-ops 的 `ops_inspect_local_file`/`ops_grep`/`ops_glob`，否则官方 `read`/`grep`/`glob`），另含 `jq`；可配 `commandLintMode: ask`；`ask` 模式下与风险规则合并为一次 `ask`；
 - [x] 文档提交门禁：`tools/pre-execute` 解析 `git commit` 目标仓，已登记仓库按中央策略运行 `scripts/check.sh --repo`，失败 `deny`；配置 `docGuardEnabled`/`docGuardWorkspaceRoot`/`docGuardTimeoutMs`；不自动改文件；
 - [x] `scripts/apply-profile.sh` 修复：检查 profile 已安装 scoped 包和失效的 `dsh-superagent` link；修正包名；删除顶层 `persistent-bash` 旧块，改为覆盖 minimal preset 的 `config.plugins` 并设 `maxOutputChars=65536`；`tool-result-pruner=6000/3000/1500`；重复执行幂等。

@@ -17,7 +17,7 @@ import { DEFAULT_DEDUPE_MIN_CHARS, DedupCache, dedupKey, diffLines } from './lib
 import { MetricsRecorder, metricOf } from './lib/metrics.js'
 import { cleanupOutputs } from './lib/cleanup.js'
 import { analyzeCommand, riskAskDecision } from './lib/risk.js'
-import { PendingRiskRules, RISK_RULE_ENDPOINT, RiskRuleStore, filterRiskByRules, normalizeRuleReason, ruleSpecsFor } from './lib/risk-allow.js'
+import { PendingRiskRules, RISK_RULE_ENDPOINT, RiskRuleStore, effectiveAllowHosts, filterRiskByRules, normalizeRuleReason, ruleSpecsFor } from './lib/risk-allow.js'
 import { lintCommand, lintDecision } from './lib/command-lint.js'
 import { TurnBudget } from './lib/turn-budget.js'
 import {
@@ -635,7 +635,21 @@ export function createRiskRuleHandler({ store, pending, riskAllowHosts, logger }
             sendJson(res, 410, { ok: false, error: 'approval-rule-expired' })
             return
           }
-          const risk = analyzeCommand(entry.command, { allowHosts: riskAllowHosts })
+          let risk = analyzeCommand(entry.command, { allowHosts: riskAllowHosts })
+          if (risk.risk) {
+            await store.load()
+            const effectiveHosts = effectiveAllowHosts(riskAllowHosts, store)
+            // 与 pre-execute 同源：卡片已按已保存 host 规则收窄，落库也只写仍未放行的主机。
+            if (store.allowedHosts().length > 0) {
+              risk = analyzeCommand(entry.command, { allowHosts: effectiveHosts })
+            }
+            // 已保存的 command/artifact 规则再次放行时保留原有「更新原因」语义，不提前返回 409；
+            // host 维度已由有效名单收窄，这里只对没有非 host 规则命中的命令做最终过滤。
+            if (!store.matchesCommand(entry.command) && !store.matchesArtifactRm(entry.command) &&
+              !store.matchesArtifactFind(entry.command)) {
+              risk = filterRiskByRules(risk, entry.command, store, effectiveHosts)
+            }
+          }
           if (!risk.risk) {
             sendJson(res, 409, { ok: false, error: 'command-no-longer-risky' })
             return
@@ -782,8 +796,14 @@ export function apply(ctx, config = {}) {
       if (risk.risk && cfg.riskAutoAllowEnabled) {
         try {
           await riskRuleStore.load()
-          risk = filterRiskByRules(risk, command, riskRuleStore, cfg.riskAllowHosts)
-          if (!risk.risk) ctx.logger?.info?.('context-guard: 命中已放行规则: %s', risk.allowedBy)
+          const effectiveHosts = effectiveAllowHosts(cfg.riskAllowHosts, riskRuleStore)
+          // 已保存的 host 规则参与后续链接检查：卡片只列仍未放行的主机，
+          // 下游 pendingRiskRules/ruleSpecsFor 的落库范围随之收窄。
+          if (riskRuleStore.allowedHosts().length > 0) {
+            risk = analyzeCommand(command, { allowHosts: effectiveHosts })
+          }
+          risk = filterRiskByRules(risk, command, riskRuleStore, effectiveHosts)
+          if (!risk.risk) ctx.logger?.info?.('context-guard: 命中已放行规则: %s', risk.allowedBy || 'host')
         } catch (error) {
           ctx.logger?.warn?.('context-guard: 风险规则匹配失败，保持询问: %s', error)
         }

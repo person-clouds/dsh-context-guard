@@ -12,7 +12,7 @@ import { DedupCache } from './lib/dedup.js'
 import { cleanupOutputs } from './lib/cleanup.js'
 import { analyzeCommand, normalizeCommand, DEFAULT_ALLOW_HOSTS } from './lib/risk.js'
 import { DEFAULT_ALLOWLIST_FILE, HOST_GROUPS, loadDefaultAllowlist } from './lib/default-allowlist.js'
-import { PendingRiskRules, RiskRuleStore, filterRiskByRules, ruleSpecsFor } from './lib/risk-allow.js'
+import { PendingRiskRules, RiskRuleStore, effectiveAllowHosts, filterRiskByRules, ruleSpecsFor } from './lib/risk-allow.js'
 import { ContinueDraftBudget, HARD_LIMIT_DRAFT_MARKER, hardLimitResultOf } from './lib/continue-draft.js'
 import { DEFAULT_SESSION_BUDGETS, DispatchRegistry, compileBudgetRules, matchBudget, snapshotFingerprint } from './lib/verify-mode.js'
 
@@ -707,6 +707,73 @@ const postRiskRuleWith = (handler, body) => new Promise(resolve => {
   handler(req, res)
 })
 const postRiskRule = (body) => postRiskRuleWith(handler, body)
+
+// 已放行主机不再重复进卡片/落库：有效白名单 = 配置或内置默认 + 已保存 host 规则
+const effectiveStoreFile = join(ruleDir, 'effective', 'risk-allow.json')
+const effectiveStore = new RiskRuleStore(effectiveStoreFile)
+// 规则库未加载时原样返回基名单
+assert.equal(effectiveAllowHosts(undefined, effectiveStore), DEFAULT_ALLOW_HOSTS)
+const registryCommand = 'curl https://registry.ollama.ai/v2/library/qwen2.5/manifests/latest'
+await effectiveStore.add(ruleSpecsFor(registryCommand, analyzeCommand(registryCommand)).map(spec => ({ ...spec, reason: '拉取 ollama 仓库清单' })))
+assert.deepEqual(effectiveAllowHosts(undefined, effectiveStore), [...DEFAULT_ALLOW_HOSTS, 'registry.ollama.ai'])
+// 配置非空时用配置值，不被默认名单覆盖，但仍合并已保存规则
+assert.deepEqual(effectiveAllowHosts(['custom.example'], effectiveStore), ['custom.example', 'registry.ollama.ai'])
+// 空配置回退内置默认；规则库缺失/无 host 规则时原样返回基名单；合并时按小写去重
+assert.deepEqual(effectiveAllowHosts([], effectiveStore), [...DEFAULT_ALLOW_HOSTS, 'registry.ollama.ai'])
+assert.deepEqual(effectiveAllowHosts(['a.example'], undefined), ['a.example'])
+assert.deepEqual(effectiveAllowHosts(['A.example'], { allowedHosts: () => ['a.example', 'REGISTRY.ollama.ai', 'registry.ollama.ai'] }), ['a.example', 'registry.ollama.ai'])
+const savedHostBefore = effectiveStore.rules.find(rule => rule.host === 'registry.ollama.ai')
+const combinedCommand = 'curl -s https://registry.ollama.ai/v2/library/qwen2.5/manifests/latest && curl -s https://ollama.com/library/qwen2.5/tags'
+const combinedRisk = analyzeCommand(combinedCommand, { allowHosts: effectiveAllowHosts(undefined, effectiveStore) })
+assert.equal(combinedRisk.risk, true)
+assert.deepEqual(combinedRisk.links, ['https://ollama.com/library/qwen2.5/tags'])
+assert.doesNotMatch(combinedRisk.reasons.find(reason => reason.code === 'unknown-link').message, /registry\.ollama\.ai/)
+assert.deepEqual(ruleSpecsFor(combinedCommand, combinedRisk).map(spec => spec.host), ['ollama.com'])
+// 路由：第二次「始终允许」只新增新主机，已放行主机的 reason/lastUsedAt 不变
+const effectivePending = new PendingRiskRules()
+const effectiveHandler = createRiskRuleHandler({ store: effectiveStore, pending: effectivePending, riskAllowHosts: undefined, logger: { warn() {} } })
+const combinedToken = effectivePending.add(combinedCommand, analyzeCommand(combinedCommand))
+const combinedSaved = await postRiskRuleWith(effectiveHandler, { action: 'allow', token: combinedToken, reason: '查看 ollama 网页说明' })
+assert.equal(combinedSaved.status, 200)
+assert.deepEqual(combinedSaved.body.rules.map(rule => rule.kind === 'host' ? rule.host : rule.kind), ['ollama.com'])
+assert.deepEqual(effectiveStore.rules.filter(rule => rule.kind === 'host').map(rule => rule.host).sort(), ['ollama.com', 'registry.ollama.ai'])
+const savedHostAfter = effectiveStore.rules.find(rule => rule.host === 'registry.ollama.ai')
+assert.equal(savedHostAfter.reason, savedHostBefore.reason)
+assert.equal(savedHostAfter.lastUsedAt, savedHostBefore.lastUsedAt)
+// pre-execute：卡片只列未放行主机；两条 ollama 规则齐全后同一命令不再 ask
+const preStoreFile = join(ruleDir, 'effective-pre', 'risk-allow.json')
+const preStore = new RiskRuleStore(preStoreFile)
+await preStore.add(ruleSpecsFor(registryCommand, analyzeCommand(registryCommand)).map(spec => ({ ...spec, reason: '拉取 ollama 仓库清单' })))
+const effectiveHandlers = new Map()
+apply({
+  on(type, fn) {
+    if (!effectiveHandlers.has(type)) effectiveHandlers.set(type, [])
+    effectiveHandlers.get(type).push(fn)
+  },
+  logger: { warn() {} },
+}, {
+  dir,
+  outputDir: join(dir, 'effective-output'),
+  metricsDir: join(dir, 'effective-metrics'),
+  thresholdChars: 3000,
+  cleanupEnabled: false,
+  riskRuleFile: preStoreFile,
+})
+const effectivePre = effectiveHandlers.get('tools/pre-execute')[0]
+const narrowedAsk = await effectivePre({ name: 'bash', callId: 'call-effective-1', arguments: { command: combinedCommand }, agent: { id: 'session-effective' } }, async () => ({ kind: 'allow' }))
+assert.equal(narrowedAsk.kind, 'ask')
+const narrowedDetail = /未在白名单中的链接：([^。\n]*)/.exec(narrowedAsk.displayReason.zh)[1]
+assert.match(narrowedDetail, /ollama\.com/)
+assert.doesNotMatch(narrowedDetail, /registry\.ollama\.ai/)
+// 两条规则齐全后，会话里的两条真实命令都不再询问
+const registryRisk = analyzeCommand(registryCommand, { allowHosts: effectiveAllowHosts(undefined, effectiveStore) })
+assert.equal(registryRisk.risk, false)
+assert.equal(filterRiskByRules(analyzeCommand(registryCommand), registryCommand, effectiveStore).risk, false)
+assert.equal(filterRiskByRules(analyzeCommand(combinedCommand), combinedCommand, effectiveStore).risk, false)
+const ollamaOnlyRisk = analyzeCommand('curl -s https://ollama.com/library/qwen2.5/tags', { allowHosts: effectiveAllowHosts(undefined, effectiveStore) })
+assert.equal(ollamaOnlyRisk.risk, false)
+// 安全回归：已放行主机 + 不可证明 fetch 仍必须确认
+assert.equal(filterRiskByRules(analyzeCommand('curl https://evil.example/a && curl "$ENDPOINT"'), 'curl https://evil.example/a && curl "$ENDPOINT"', ruleStore).risk, true)
 
 // 原因先校验再消费 token：缺原因/纯空白返回 400，且待放行项仍可重试
 const missingReasonToken = pendingRules.add(riskyCommand, analyzeCommand(riskyCommand))
