@@ -629,12 +629,19 @@ export function createRiskRuleHandler({ store, pending, riskAllowHosts, logger }
             sendJson(res, 400, { ok: false, error: 'reason-required' })
             return
           }
+          // 范围只接受 auto（按类别收窄）与 command（仅整条命令），其它值按坏请求处理，同样不消费 token。
+          const scope = parsed.scope === undefined ? 'auto' : String(parsed.scope)
+          if (scope !== 'auto' && scope !== 'command') {
+            sendJson(res, 400, { ok: false, error: 'invalid-scope' })
+            return
+          }
           await pending.load()
           const entry = pending.take(parsed.token) || pending.takeByCallId(parsed.callId)
           if (!entry) {
             sendJson(res, 410, { ok: false, error: 'approval-rule-expired' })
             return
           }
+          const cwd = typeof entry.cwd === 'string' ? entry.cwd : undefined
           let risk = analyzeCommand(entry.command, { allowHosts: riskAllowHosts })
           if (risk.risk) {
             await store.load()
@@ -647,14 +654,14 @@ export function createRiskRuleHandler({ store, pending, riskAllowHosts, logger }
             // host 维度已由有效名单收窄，这里只对没有非 host 规则命中的命令做最终过滤。
             if (!store.matchesCommand(entry.command) && !store.matchesArtifactRm(entry.command) &&
               !store.matchesArtifactFind(entry.command)) {
-              risk = filterRiskByRules(risk, entry.command, store, effectiveHosts)
+              risk = filterRiskByRules(risk, entry.command, store, effectiveHosts, cwd)
             }
           }
           if (!risk.risk) {
             sendJson(res, 409, { ok: false, error: 'command-no-longer-risky' })
             return
           }
-          const specs = ruleSpecsFor(entry.command, risk).map(spec => ({ ...spec, reason }))
+          const specs = ruleSpecsFor(entry.command, risk, Date.now(), { scope, cwd }).map(spec => ({ ...spec, reason }))
           if (specs.length === 0) {
             sendJson(res, 400, { ok: false, error: 'no-rule-parsed' })
             return
@@ -791,6 +798,8 @@ export function apply(ctx, config = {}) {
     }
 
     const asks = []
+    // 临时清理规则按 cwd 生效：与 docGuard 一样优先取工具参数里的工作目录。
+    const riskCwd = exec?.arguments?.cwd || exec?.arguments?.workdir || exec?.cwd || undefined
     if (cfg.riskCheckEnabled && cfg.riskToolNames.includes(exec?.name)) {
       let risk = analyzeCommand(command, { allowHosts: cfg.riskAllowHosts })
       if (risk.risk && cfg.riskAutoAllowEnabled) {
@@ -802,7 +811,7 @@ export function apply(ctx, config = {}) {
           if (riskRuleStore.allowedHosts().length > 0) {
             risk = analyzeCommand(command, { allowHosts: effectiveHosts })
           }
-          risk = filterRiskByRules(risk, command, riskRuleStore, effectiveHosts)
+          risk = filterRiskByRules(risk, command, riskRuleStore, effectiveHosts, riskCwd)
           if (!risk.risk) ctx.logger?.info?.('context-guard: 命中已放行规则: %s', risk.allowedBy || 'host')
         } catch (error) {
           ctx.logger?.warn?.('context-guard: 风险规则匹配失败，保持询问: %s', error)
@@ -812,7 +821,7 @@ export function apply(ctx, config = {}) {
         ctx.logger?.info?.('context-guard: 风险命令待确认 (%s): %s', risk.level, risk.preview)
         const ask = riskAskDecision(risk)
         if (cfg.riskAutoAllowEnabled) {
-          const token = pendingRiskRules.add(command, risk, exec?.callId)
+          const token = pendingRiskRules.add(command, risk, exec?.callId, riskCwd)
           ask.reason = `${ask.reason}; rule-token: ${token}`
         }
         asks.push(ask)

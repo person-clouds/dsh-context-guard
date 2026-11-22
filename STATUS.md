@@ -2,7 +2,7 @@
 
 - 版本：`0.5.0`（本地已就绪，待发布；`npm publish` 需用户 2FA）
 - 更新时间：2026-11-22
-- 一句话：DSH 工具输出预算/落盘、去重、单轮调用/输出门禁、硬上限后 Web 自动填入「继续」、命令形态拦截、风险确认与窄规则自动放行、内置放行默认值外置、只读诊断、压缩归档与指标。
+- 一句话：DSH 工具输出预算/落盘、去重、单轮调用/输出门禁、硬上限后 Web 自动填入「继续」、命令形态拦截、风险确认与窄规则自动放行（含按 cwd 的 `.tmp*` 清理与命令范围）、内置放行默认值外置、只读诊断、压缩归档与指标。
 - 位置：`dsh-context-guard/`；web profile 已按 link 加载并完成「始终允许」实机验证，superagent profile 待重启后核对。
 
 ## 已完成
@@ -21,6 +21,7 @@
 - [x] 清理：7 天保留、单会话 50MB/300 文件、全局 500MB，删除最旧文件，保留当前会话最近 3 个；
 - [x] `scripts/inspect.sh`：overview/service/app/logs/git/ports/docker/http/report，只读、有界输出、可选 linuxops 只读子命令；
 - [x] `tools/pre-execute` 风险命令警示：删除/仓库删除、git 强推/重置、下载执行、未知链接（含 `web_fetch`）、关机停服、容器/数据库删除、提权等返回 `ask` 让用户确认；不覆盖已有 deny/cancel/ask。
+- [x] 风险规则收口：URL 尾部标点/未配对右括号先剥掉再取主机，`host` 规则经 `isValidHost` 校验（非法主机不匹配、不写规则、不进有效名单）；新增 `temp-rm` 规则，只在记录的 cwd 下对 `.tmp*` 简单 `rm` 生效，`/tmp` 仍由内置临时根直接放行；`scope:'command'` 与卡片「仅记住这条完整命令」只落规范化命令哈希；保存成功提示实际规则类型。
 - [x] 单轮 bash 调用门禁：第 80 次 `ask`（同一轮只问一次），第 160 次起 `deny`；`turn/start` 重置，缺事件时按 session 退化计数并 warning；
 - [x] 软上限自动继续：单轮 bash 达到 `maxCallsPerTurn`（默认 80）即暂停本轮，deny reason 带 `context-guard:hard-limit-draft`；Web 客户端在输入框为空时写入 `继续`（无换行、不自动发送）；`hardMaxCallsPerTurn`（默认 160）仅兜底；同 session 最多 3 次、同 turn 最多 1 次；Desktop/TUI 静默降级；
 - [x] 修复 Web 自动继续不生效：组件内改为访问插件级 `pluginCtx`；同时兼容真实拒绝事件形状（`data.message.content[].text` + `isError`）与 `data.error.reason`；打开会话时对最近 30 分钟事件补写；新增 VM 集成测试；
@@ -130,3 +131,5 @@
 | 2026-11-22 | `apply-profile.sh` 增加 D：会话预算（fixture 实跑） | PASS：以真实 web profile 副本跑脚本，diff 仅新增 15 行 `sessionBudgets`（D 25/40 + V 25/40/20000 + `denyTools` + 3 条 `denyCommands`），原有 `40/80` 未变；二次执行不重复插入；`20/80` 迁移用例只在块内改为 `80/160`。用安装包 `yaml` 解析加 `lib/verify-mode.js` 的 `compileBudgetRules`/`matchBudget` 验证：`D：`、`TODO：D：` 命中讨论会话，`V：`、`V：计划：` 命中核验会话（`denyTools` 与 3 条 `denyCommands` 保留），`G：` 与无冒号 `D` 走全局默认 |
 | 2026-11-22 | `npm test`（仅脚本/文档改动） | ok；插件代码未改，回归通过 |
 | 2026-11-22 | `./scripts/check.sh --repo dsh-context-guard --changed` | PASS（见提交前输出；`README.md` 超行数属既有篇幅） |
+| 2026-11-22 | `npm test`（风险规则收口） | ok；新增 URL 尾部标点/括号归一、非法 host 规则惰性、`/tmp` 免询问、cwd `.tmp*` temp-rm（相对路径/重载/换 cwd/软链逃逸/复合命令/`.git`/`sudo`/通配/尾斜杠）、artifact-rm 优先、`scope:'command'` 路由、待放行项 cwd 落盘与 pre-execute 端到端放行 |
+| 2026-11-22 | `./scripts/check.sh --repo dsh-context-guard` | PASS（见本次提交前输出；README 超行数属既有篇幅） |

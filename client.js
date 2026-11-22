@@ -102,9 +102,22 @@ window.__ModuleLoader__.load({
     function riskDescription() {
       const language = String(globalThis.navigator?.language || '').toLowerCase()
       if (language.startsWith('zh')) {
-        return '点击「始终允许」会先要求填写放行原因，并把原因作为规则标记保存；随后把命令解析成安全类规则：同一项目前缀下清理构建产物（node_modules、dist、build、.cache 等）会自动放行；未知链接只放行该主机；无法证明为安全类时只记住完全相同的命令。不会按高风险代码全量放行。'
+        return '点击「始终允许」会先要求填写放行原因，并把原因作为规则标记保存；随后把命令解析成安全类规则：同一项目前缀下清理构建产物（node_modules、dist、build、.cache 等）会自动放行；当前目录 `.tmp*` 下的简单 rm 只在当前目录自动放行；未知链接只放行该主机；无法证明为安全类时只记住完全相同的命令。勾选「仅记住这条完整命令」可跳过类别放宽。不会按高风险代码全量放行。'
       }
-      return '“Always allow” first asks for a reason and stores it as the rule label; it then parses the command into a safe-class rule: cleaning build artifacts (node_modules, dist, build, .cache, …) under the same project prefix is auto-allowed; unknown links allow only that host; when no safe class can be proven, only the exact command is remembered. High-risk codes are never wildcarded.'
+      return '“Always allow” first asks for a reason and stores it as the rule label; it then parses the command into a safe-class rule: cleaning build artifacts (node_modules, dist, build, .cache, …) under the same project prefix is auto-allowed; a simple rm under `.tmp*` is auto-allowed only in the current directory; unknown links allow only that host; when no safe class can be proven, only the exact command is remembered. Tick “remember only this exact command” to skip category widening. High-risk codes are never wildcarded.'
+    }
+
+    /** 把落库的规则种类翻成一句人话，让用户知道这次放宽了什么。 */
+    function describeRuleKinds(kinds) {
+      const names = {
+        host: '仅放行这些主机',
+        command: '仅这条完整命令',
+        'artifact-rm': '同一项目前缀下的构建产物清理',
+        'artifact-find': '同一项目前缀下的产物查找删除',
+        'temp-rm': '当前目录下 `.tmp*` 的临时清理',
+      }
+      const labels = kinds.map(kind => names[kind]).filter(Boolean)
+      return labels.length > 0 ? labels.join('、') : '已保存'
     }
 
     function showNotice(text) {
@@ -146,7 +159,7 @@ window.__ModuleLoader__.load({
         title.textContent = '填写放行原因'
         title.style.cssText = 'font-size:15px;font-weight:600;margin-bottom:6px'
         const help = doc.createElement('div')
-        help.textContent = '原因会作为规则标记保存到 risk-allow.json，便于以后复核这条「始终允许」。'
+        help.textContent = '原因会作为规则标记保存到 risk-allow.json，便于以后复核这条「始终允许」；默认按安全类别收窄，不会整条命令全量放行。'
         help.style.cssText = 'color:#9ca3af;margin-bottom:12px'
         const input = doc.createElement('input')
         input.type = 'text'
@@ -157,6 +170,15 @@ window.__ModuleLoader__.load({
         const hint = doc.createElement('div')
         hint.textContent = `必填，最多 ${REASON_MAX} 字`
         hint.style.cssText = 'color:#9ca3af;margin:6px 0 14px'
+        const onlyLabel = doc.createElement('label')
+        onlyLabel.style.cssText = 'display:flex;align-items:center;gap:8px;color:#d1d5db;margin:0 0 16px;cursor:pointer'
+        const onlyBox = doc.createElement('input')
+        onlyBox.type = 'checkbox'
+        onlyBox.style.cssText = 'margin:0;accent-color:#2563eb'
+        const onlyText = doc.createElement('span')
+        onlyText.textContent = '仅记住这条完整命令（不按类别放宽）'
+        onlyLabel.appendChild(onlyBox)
+        onlyLabel.appendChild(onlyText)
         const actions = doc.createElement('div')
         actions.style.cssText = 'display:flex;justify-content:flex-end;gap:10px'
         const cancel = doc.createElement('button')
@@ -183,7 +205,7 @@ window.__ModuleLoader__.load({
             input.focus?.()
             return
           }
-          finish(text.slice(0, REASON_MAX))
+          finish({ reason: text.slice(0, REASON_MAX), scope: onlyBox.checked ? 'command' : 'auto' })
         }
         cancel.addEventListener('click', () => finish(null))
         save.addEventListener('click', submit)
@@ -199,6 +221,7 @@ window.__ModuleLoader__.load({
         panel.appendChild(help)
         panel.appendChild(input)
         panel.appendChild(hint)
+        panel.appendChild(onlyLabel)
         panel.appendChild(actions)
         actions.appendChild(cancel)
         actions.appendChild(save)
@@ -216,7 +239,7 @@ window.__ModuleLoader__.load({
       return new Error(text)
     }
 
-    async function saveRiskRuleAndAllow(approval, reason) {
+    async function saveRiskRuleAndAllow(approval, choice) {
       const token = riskRuleToken(approval.reason)
       if (!token) throw riskRuleFailure('审批信息里缺少放行 token，请重新触发风险命令后再试')
       const startedAt = Date.now()
@@ -239,7 +262,8 @@ window.__ModuleLoader__.load({
           body: JSON.stringify({
             action: 'allow',
             token,
-            reason,
+            reason: choice.reason,
+            ...(choice.scope === 'command' ? { scope: 'command' } : {}),
             ...(approval.callId === undefined ? {} : { callId: approval.callId }),
           }),
           ...(controller ? { signal: controller.signal } : {}),
@@ -259,9 +283,13 @@ window.__ModuleLoader__.load({
         const hint = detail === 'approval-rule-expired' ? '；审批 token 已超过 10 分钟有效期，请重新触发命令' : ''
         throw riskRuleFailure(`${detail}（HTTP ${response.status}）${hint}`)
       }
+      const kinds = Array.isArray(body.rules) ? [...new Set(body.rules.map(rule => rule.kind))] : []
+      const summary = describeRuleKinds(kinds)
       if (slow) {
         const seconds = ((Date.now() - startedAt) / 1000).toFixed(1)
-        showNotice(`「始终允许」已保存（耗时 ${seconds} 秒），同类命令后续会自动放行。`)
+        showNotice(`「始终允许」已保存（耗时 ${seconds} 秒）：${summary}。`)
+      } else {
+        showNotice(`「始终允许」已保存：${summary}。`)
       }
       await approval.answer('allowed-once')
     }
@@ -278,9 +306,9 @@ window.__ModuleLoader__.load({
         onAllow: () => approval.answer('allowed-once'),
         onReject: () => approval.answer('rejected'),
         onAlways: async () => {
-          const reason = await askRiskReason()
-          if (reason === null) return
-          await saveRiskRuleAndAllow(approval, reason)
+          const choice = await askRiskReason()
+          if (choice === null) return
+          await saveRiskRuleAndAllow(approval, choice)
         },
       })
     }

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
-import { access, chmod, copyFile, mkdir, mkdtemp, readFile, readdir, utimes, writeFile } from 'node:fs/promises'
+import { access, chmod, copyFile, mkdir, mkdtemp, readFile, readdir, realpath, rm, symlink, utimes, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import vm from 'node:vm'
@@ -10,7 +10,7 @@ import { lintCommand, lintDecision } from './lib/command-lint.js'
 import { TurnBudget } from './lib/turn-budget.js'
 import { DedupCache } from './lib/dedup.js'
 import { cleanupOutputs } from './lib/cleanup.js'
-import { analyzeCommand, normalizeCommand, DEFAULT_ALLOW_HOSTS } from './lib/risk.js'
+import { analyzeCommand, normalizeCommand, DEFAULT_ALLOW_HOSTS, extractUrls, hostOf } from './lib/risk.js'
 import { DEFAULT_ALLOWLIST_FILE, HOST_GROUPS, loadDefaultAllowlist } from './lib/default-allowlist.js'
 import { PendingRiskRules, RiskRuleStore, effectiveAllowHosts, filterRiskByRules, ruleSpecsFor } from './lib/risk-allow.js'
 import { ContinueDraftBudget, HARD_LIMIT_DRAFT_MARKER, hardLimitResultOf } from './lib/continue-draft.js'
@@ -1466,6 +1466,11 @@ assert.equal(docAllowed, null)
 // 核验态：预算规则编译、标题匹配、快照指纹、派单去重
 const verifyRules = compileBudgetRules(DEFAULT_SESSION_BUDGETS)
 assert.equal(verifyRules.length, 1)
+// 只读边界：官方 write/edit 之外，dsh-ops 写工具也必须被精确名 deny，否则 V：会话可绕过只读。
+const verifyRule = matchBudget(verifyRules, 'V: 只读边界')
+for (const name of ['write', 'edit', 'ops_write_file', 'ops_edit_file', 'ops_replace', 'ops_remove', 'ops_move', 'ops_copy', 'ops_batch']) {
+  assert.ok(verifyRule.denyTools.includes(name), `denyTools 缺少 ${name}`)
+}
 // 标题契约：`V：` 覆盖 /V 与 /VP，手动改名同样生效；D/G 不得误命中。
 assert.equal(matchBudget(verifyRules, 'V: 核验 diff')?.maxCallsPerTurn, 25)
 assert.equal(matchBudget(verifyRules, 'TODO：V: 核验 diff')?.hardMaxCallsPerTurn, 40)
@@ -1562,5 +1567,177 @@ const secondDispatch = await verifyPre(dExec('subagent', { prompt: dispatchPromp
 assert.equal(secondDispatch.kind, 'deny')
 assert.match(secondDispatch.reason, /dispatch-guard/)
 assert.equal((await verifyPre(dExec('subagent', { prompt: `${dispatchPrompt}\nverify-again` }), allow)).kind, 'allow')
+
+// ---- 风险放行规则收口：URL 尾部归一、host 校验、cwd 临时清理、命令范围 ----
+// 尾部标点/未配对右括号不进主机，括号成对的路径完整保留
+assert.equal(hostOf('http://EXAMPLE.com./x'), 'example.com')
+assert.equal(hostOf('http://foo_bar/x'), 'foo_bar')
+assert.equal(hostOf('http://[::1]:8080/x'), '[::1]')
+assert.equal(hostOf('http://registry.npmjs.org)'), '')
+assert.equal(hostOf('http://$(tailscale ip -4):8791/x'), '')
+assert.deepEqual(extractUrls('curl https://example.com/a.'), ['https://example.com/a'])
+assert.deepEqual(extractUrls('curl "https://example.com/x),"'), ['https://example.com/x'])
+assert.deepEqual(extractUrls('curl https://en.wikipedia.org/wiki/Foo_(bar)'), ['https://en.wikipedia.org/wiki/Foo_(bar)'])
+const trailingRisk = analyzeCommand('curl https://example.com/a.')
+assert.deepEqual(trailingRisk.links, ['https://example.com/a'])
+assert.deepEqual(ruleSpecsFor('curl https://example.com/a.', trailingRisk).map(spec => spec.host), ['example.com'])
+
+// 动态主机段取不出真实主机时不能落 host 规则，退回整条命令
+const dynamicCommand = 'curl http://$(tailscale ip -4):8791/x'
+const dynamicRisk = analyzeCommand(dynamicCommand)
+assert.equal(dynamicRisk.risk, true)
+assert.deepEqual(ruleSpecsFor(dynamicCommand, dynamicRisk).map(spec => spec.kind), ['command'])
+
+// 历史坏 host 规则留在文件里但不参与匹配/有效名单
+const invalidHostDir = join(ruleDir, 'invalid-host')
+await mkdir(invalidHostDir, { recursive: true })
+await writeFile(join(invalidHostDir, 'risk-allow.json'), JSON.stringify({
+  version: 1,
+  rules: [
+    { kind: 'host', key: 'bad)host', id: 'host:bad', host: 'bad)host', level: 'high', codes: ['unknown-link'], preview: 'x', createdAt: 1 },
+    { kind: 'host', key: 'good.example', id: 'host:good', host: 'good.example', level: 'high', codes: ['unknown-link'], preview: 'x', createdAt: 1 },
+  ],
+}, null, 2))
+const invalidHostStore = new RiskRuleStore(join(invalidHostDir, 'risk-allow.json'))
+await invalidHostStore.load()
+assert.equal(invalidHostStore.rules.length, 2)
+assert.deepEqual(invalidHostStore.allowedHosts(), ['good.example'])
+assert.ok(!effectiveAllowHosts(undefined, invalidHostStore).includes('bad)host'))
+
+// `/tmp` 仍由 analyze 的 tempRoots 直接免询问，且不会生成规则
+const tmpCommand = 'rm -rf /tmp/cg-scope-scratch'
+const tmpRisk = analyzeCommand(tmpCommand)
+assert.equal(tmpRisk.risk, false)
+assert.deepEqual(ruleSpecsFor(tmpCommand, tmpRisk), [])
+
+const scopeBase = await realpath(await mkdtemp(join(tmpdir(), 'cg-scope-')))
+await mkdir(join(scopeBase, '.tmp-build'), { recursive: true })
+const tempStoreFile = join(scopeBase, 'risk-allow.json')
+const tempStore = new RiskRuleStore(tempStoreFile)
+const tempCommand = 'rm -rf .tmp-build'
+const tempRisk = analyzeCommand(tempCommand)
+assert.equal(tempRisk.risk, true)
+const tempSpecs = ruleSpecsFor(tempCommand, tempRisk, Date.now(), { cwd: scopeBase })
+assert.deepEqual(tempSpecs.map(spec => spec.kind), ['temp-rm'])
+assert.equal(tempSpecs[0].cwd, scopeBase)
+await tempStore.add(tempSpecs.map(spec => ({ ...spec, reason: '清理本次构建临时目录' })))
+assert.equal(filterRiskByRules(tempRisk, tempCommand, tempStore, undefined, scopeBase).risk, false)
+// 缺 cwd 时临时规则不生效，仍然询问
+assert.equal(filterRiskByRules(tempRisk, tempCommand, tempStore).risk, true)
+// 规则随文件重载仍生效；同 cwd 下其它 `.tmp*` 相对路径也命中
+const tempReloaded = new RiskRuleStore(tempStoreFile)
+await tempReloaded.load()
+assert.equal(filterRiskByRules(tempRisk, tempCommand, tempReloaded, undefined, scopeBase).risk, false)
+assert.equal(filterRiskByRules(analyzeCommand('rm -rf .tmp-build/out'), 'rm -rf .tmp-build/out', tempReloaded, undefined, scopeBase).risk, false)
+// 换个 cwd（别的项目）不命中
+assert.equal(filterRiskByRules(tempRisk, tempCommand, tempReloaded, undefined, ruleDir).risk, true)
+// 绝对路径的 /tmp 别名即使真实路径落在 cwd 也不认，避免借软链接造规则
+const aliasRisk = { risk: true, level: 'high', reasons: [{ code: 'destructive-rm', message: 'x' }], preview: 'x' }
+assert.equal(filterRiskByRules(aliasRisk, 'rm -rf /tmp/cg-scope-alias/.tmp-build', tempStore, undefined, scopeBase).risk, true)
+assert.deepEqual(ruleSpecsFor('rm -rf /tmp/cg-scope-alias/.tmp-build', aliasRisk, 1, { cwd: scopeBase }).map(spec => spec.kind), ['command'])
+
+// 复合命令、通配、尾斜杠、..、家目录、重定向、.git 内路径都不算临时清理
+for (const command of [
+  'rm -rf .tmp-build && echo done',
+  'cd .tmp-build && rm -rf scratch',
+  'rm -rf .tmp-build/*',
+  'rm -rf .tmp-build/',
+  'rm -rf .tmp-build/../other',
+  'rm -rf ~/.tmp-build',
+  'rm -rf .git/.tmp-build',
+  'rm -rf .tmp-build > /dev/null',
+  'sudo rm -rf .tmp-build',
+]) {
+  const risk = analyzeCommand(command)
+  assert.equal(risk.risk, true, `${command} 应仍为风险命令`)
+  assert.deepEqual(ruleSpecsFor(command, risk, Date.now(), { cwd: scopeBase }).map(spec => spec.kind), ['command'], `${command} 不应落 temp-rm`)
+}
+// `.tmp*` 里的构建产物仍按项目前缀落 artifact-rm，不放大成整个 cwd 的临时清理
+assert.deepEqual(ruleSpecsFor('rm -rf .tmp-build/node_modules', analyzeCommand('rm -rf .tmp-build/node_modules'), Date.now(), { cwd: scopeBase }).map(spec => spec.kind), ['artifact-rm'])
+
+// 软链接逃出 cwd：`.tmp-escape -> scopeBase/outside` 不命中
+const outsideDir = join(scopeBase, 'outside-target')
+await mkdir(outsideDir, { recursive: true })
+await symlink(outsideDir, join(scopeBase, '.tmp-escape'))
+assert.deepEqual(ruleSpecsFor('rm -rf .tmp-escape', analyzeCommand('rm -rf .tmp-escape'), Date.now(), { cwd: scopeBase }).map(spec => spec.kind), ['command'])
+
+// 勾选「仅记住这条完整命令」：只落 command，不落 host
+const hostCommand = 'curl https://example.com/a'
+const scopeHostRisk = analyzeCommand(hostCommand)
+assert.deepEqual(ruleSpecsFor(hostCommand, scopeHostRisk).map(spec => spec.kind), ['host'])
+assert.deepEqual(ruleSpecsFor(hostCommand, scopeHostRisk, Date.now(), { scope: 'command' }).map(spec => spec.kind), ['command'])
+
+// 路由：scope 非法不消费 token；scope=command 落整条；cwd 临时清理落 temp-rm
+const scopedRouteStore = new RiskRuleStore(join(scopeBase, 'route-risk-allow.json'))
+const scopePending = new PendingRiskRules()
+const scopeHandler = createRiskRuleHandler({ store: scopedRouteStore, pending: scopePending, riskAllowHosts: undefined, logger: { warn() {} } })
+const scopeToken = scopePending.add(hostCommand, scopeHostRisk)
+const badScope = await postRiskRuleWith(scopeHandler, { action: 'allow', token: scopeToken, reason: '仅此命令', scope: 'regex' })
+assert.equal(badScope.status, 400)
+assert.equal(badScope.body.error, 'invalid-scope')
+assert.ok(await scopePending.take(scopeToken))
+const commandScopeToken = scopePending.add(hostCommand, scopeHostRisk)
+const commandScopeSaved = await postRiskRuleWith(scopeHandler, { action: 'allow', token: commandScopeToken, reason: '仅此命令', scope: 'command' })
+assert.equal(commandScopeSaved.status, 200)
+assert.deepEqual(commandScopeSaved.body.rules.map(rule => rule.kind), ['command'])
+
+const tempPending = new PendingRiskRules()
+const tempHandler = createRiskRuleHandler({ store: scopedRouteStore, pending: tempPending, riskAllowHosts: undefined, logger: { warn() {} } })
+const tempToken = tempPending.add(tempCommand, tempRisk, 'call-temp-route', scopeBase)
+const tempSaved = await postRiskRuleWith(tempHandler, { action: 'allow', token: tempToken, reason: '清理临时构建目录' })
+assert.equal(tempSaved.status, 200)
+assert.deepEqual(tempSaved.body.rules.map(rule => rule.kind), ['temp-rm'])
+assert.deepEqual(tempSaved.body.rules.map(rule => rule.scope), ['temp-rm'])
+assert.equal(filterRiskByRules(tempRisk, tempCommand, scopedRouteStore, undefined, scopeBase).risk, false)
+
+// 待放行项落盘时保留 cwd，插件重载后仍能按 cwd 落 temp-rm
+const pendingCwdFile = join(scopeBase, 'pending-cwd.json')
+const pendingCwd = new PendingRiskRules({ file: pendingCwdFile })
+const pendingCwdToken = pendingCwd.add(tempCommand, tempRisk, 'call-cwd-persist', scopeBase)
+await pendingCwd.load()
+await pendingCwd.persist()
+const pendingCwdReloaded = new PendingRiskRules({ file: pendingCwdFile })
+await pendingCwdReloaded.load()
+assert.equal((await pendingCwdReloaded.take(pendingCwdToken))?.cwd, scopeBase)
+
+// pre-execute：从 exec.arguments.cwd 取工作目录；落库后同一 cwd 的 `.tmp*` 清理不再询问
+await mkdir(join(scopeBase, '.tmp-pre'), { recursive: true })
+const preCwdDir = join(scopeBase, 'pre-cwd')
+const cwdHandlers = new Map()
+let riskRouteHandler
+const cwdCtx = {
+  on(type, fn) {
+    if (!cwdHandlers.has(type)) cwdHandlers.set(type, [])
+    cwdHandlers.get(type).push(fn)
+  },
+  logger: { warn() {}, info() {} },
+  inject(names, register) {
+    register({
+      effect(fn) { fn() },
+      webServer: { register(def) { riskRouteHandler = def.handler } },
+    })
+  },
+}
+apply(cwdCtx, {
+  dir: preCwdDir,
+  outputDir: join(preCwdDir, 'output'),
+  metricsDir: join(preCwdDir, 'metrics'),
+  cleanupEnabled: false,
+  docGuardEnabled: false,
+  riskRuleFile: join(preCwdDir, 'risk-allow.json'),
+})
+const cwdPre = cwdHandlers.get('tools/pre-execute')[0]
+const cwdExec = callId => ({ name: 'bash', callId, arguments: { command: 'rm -rf .tmp-pre', cwd: scopeBase }, agent: { id: 'session-cwd' } })
+const firstAsk = await cwdPre(cwdExec('call-cwd-1'), async () => ({ kind: 'allow' }))
+assert.equal(firstAsk.kind, 'ask')
+const firstToken = /rule-token: ([a-f0-9]+)/.exec(firstAsk.reason || '')?.[1]
+assert.ok(firstToken)
+assert.ok(riskRouteHandler)
+const preSaved = await postRiskRuleWith(riskRouteHandler, { action: 'allow', token: firstToken, reason: '清理本仓临时目录' })
+assert.equal(preSaved.status, 200)
+assert.deepEqual(preSaved.body.rules.map(rule => rule.kind), ['temp-rm'])
+assert.equal((await cwdPre(cwdExec('call-cwd-2'), async () => ({ kind: 'allow' }))).kind, 'allow')
+
+await rm(scopeBase, { recursive: true, force: true })
 
 console.log('ok')

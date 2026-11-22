@@ -126,13 +126,14 @@ dsh --profile web --dump-config | grep -E "context-guard|maxOutputChars|tool-res
 - `sudo -n true`、`sudo -n -v` 及 `sudo -n` + 只读检查命令（`ls`、`stat`、`cat`、`grep`、`systemctl status` 等）不触发 `privilege-escalation`；`touch <探测文件> && rm <同一文件>`、`f=$(mktemp /tmp/...) && rm -f "$f"` 这类自清理写探测不触发 `destructive-rm`。
 - 以上临时根、测试目录、`~/opt`、产物目录、写探测和 `sudo`/`systemctl` 只读清单都来自 [`config/risk-allow-default.json`](config/risk-allow-default.json)，改 JSON 即可调整。
 
-链接白名单同样来自该文件，按 `local`、`codeHosting`、`api`、`docs`、`techMedia` 分组，共 28 个主机；分组只影响文档与复核，运行时不区分来源。`riskAllowHosts` 显式设置时覆盖内置，用户「始终允许」保存的 host 规则与内置取并集；个人/内部域名（如 Tailscale 主机）不进内置。配置缺失或字段非法时回退最小安全默认（仅 `localhost`、`127.0.0.1`、`[::1]`）并告警，方向只会更严格。
+链接白名单同样来自该文件，按 `local`、`codeHosting`、`api`、`docs`、`techMedia` 分组，共 28 个主机；分组只影响文档与复核，运行时不区分来源。`riskAllowHosts` 显式设置时覆盖内置，用户「始终允许」保存的 host 规则与内置取并集；个人/内部域名（如 Tailscale 主机）不进内置。配置缺失或字段非法时回退最小安全默认（仅 `localhost`、`127.0.0.1`、`[::1]`）并告警，方向只会更严格。取链接时先剥掉末尾的 `,`、`.`、`;` 和未配对的 `)`（`Foo_(bar)` 这类成对括号保留），再按 URL 主机名校验：含空格/括号/引号/`$` 等取不出合法主机的 URL 不写 host 规则，也不会静默放行。
 
 「始终允许」在 Host 侧用审批 reason 里的短期 token 取回原始命令、重新解析后，把窄规则存进 `${DSH_HOME:-~/.dsh}/context-guard/risk-allow.json`：
 
 - 点击后先要求填写放行原因（必填、最多 200 字），原因作为规则标记 `reason` 写入同一 JSON，仅供复核、不参与匹配；明文落盘，别填密码/Token。
 - 构建产物清理按「项目前缀 + 产物目录」泛化：确认 `rm -rf ./node_modules` 后，同项目的 `rm -rf ./dist`、`rm -rf packages/a/build` 自动放行；`./src`、`..`、`sudo`/`xargs`/命令替换仍询问；产物目录内的尾部通配和 `find ... -delete` 按同类规则处理。
-- 风险仅来自未知链接时只保存该主机；无法证明安全类时退化为完全相同的规范化命令哈希。命令形态拦截和 DSH 权限策略仍照常生效。
+- 当前目录下的临时清理单独记一条 `temp-rm`：确认 `rm -rf .tmp-build` 后，只在该 cwd 下对 `.tmp*` 路径生效（`cwd` 取自 `exec.arguments.cwd`/`workdir`，无 cwd 时不生成也不匹配）；`/tmp` 等内置临时根仍直接放行、不重复造规则；`.tmp*/node_modules` 这类仍按构建产物规则处理。`..`、通配、尾部 `/`、`~`、`sudo`/`xargs`、重定向、复合命令（`cd … && rm`）、`.git` 内路径以及软链接逃出 cwd 的目标都不算临时清理。
+- 风险仅来自未知链接时只保存该主机；无法证明安全类时退化为完全相同的规范化命令哈希。卡片可勾选「仅记住这条完整命令」强制只落哈希、跳过类别放宽。保存成功后右下角提示实际写入的规则类型（host / command / artifact-rm / artifact-find / temp-rm）。命令形态拦截和 DSH 权限策略仍照常生效。
 - 可用 `riskAutoAllowEnabled: false` 关闭按钮与自动放行，`riskRuleFile` 改规则文件位置，删除 JSON 即整体撤销。
 - 待放行项内存保留 10 分钟；为避免插件重载丢 token，会短期写入同目录 `risk-pending.json`（0600、过期自动清理），token 失效时按审批 `callId` 兜底。
 - 保存失败时页面右下角显示错误码与 HTTP 状态（如 `approval-rule-expired（HTTP 410）`）并写控制台；超过 2 秒先提示「仍在保存」，15 秒按超时处理。失败不消耗审批，仍可点「允许一次」。
@@ -272,7 +273,7 @@ bash dsh-context-guard/scripts/apply-compaction.sh apply     # 备份后原位�
 
 - 入口：guard 不提供命令入口。装配套 `dsh-workflow-shortcuts` ≥ `0.4.0` 后由 `/V`（实施核验，标题 `V：…`）与 `/VP`（计划核验，标题 `V：计划：…`）写入标题；只装 guard 时手动把会话标题改成 `V：…` 同样生效，任何客户端写入的标题都按同一正则匹配。
 - 预算收紧：默认第 25 次 `bash` 提醒、第 40 次硬拒、单轮输出超过 20000 字符后只留摘要；
-- 只读：`denyTools`（默认 `write`、`edit`）与 `denyCommands`（装依赖、`git commit/push/add`、重启服务）直接 `deny`；
+- 只读：`denyTools`（默认 `write`、`edit`，以及 dsh-ops 写工具 `ops_write_file`、`ops_edit_file`、`ops_replace`、`ops_remove`、`ops_move`、`ops_copy`、`ops_batch`）与 `denyCommands`（装依赖、`git commit/push/add`、重启服务）直接 `deny`；PTC 的 `run_code` 不在默认拒绝列表，启用 PTC 的会话不要在 `V：` 态里用。
 - 非 `V：` 会话保持全局默认（80 / 160 / 40000）。
 - `D：` 会话：`scripts/apply-profile.sh` 额外写入一条 `D：` / `TODO D：` 规则（25 / 40，不设 `denyTools`，允许写计划）；`sessionBudgets` 整体替换默认，自定义时须同时保留 `V：` 规则。
 
