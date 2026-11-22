@@ -513,6 +513,10 @@ for (const unprovable of [
   'curl -sS "$U" | jq .',
   "curl '$URL'",
   'curl https://github.com/x $(cat endpoints.txt)',
+  'curl --retry-all-errors "$U"',
+  'curl --compressed "$U"',
+  'curl -K cfg.txt',
+  'wget -i urls.txt',
 ]) {
   assert.ok(analyzeCommand(unprovable).reasons.some(reason => reason.code === 'unverifiable-fetch'), `目标不可证明应确认：${unprovable}`)
   assert.equal(filterRiskByRules(analyzeCommand(unprovable), unprovable, ruleStore).risk, true, `目标不可证明不得静默放行：${unprovable}`)
@@ -524,6 +528,14 @@ for (const fine of [
   'curl -o "$OUT" https://github.com/a',
   'wget -O "$OUT" https://github.com/a',
   'curl "https://github.com/$USER/repo"',
+  'curl --oauth2-bearer "$TOKEN" https://github.com/a',
+  'curl --limit-rate "$R" https://github.com/a',
+  'curl --json "$BODY" https://github.com/a',
+  'wget --method "$M" https://github.com/a',
+  'curl --version',
+  'curl -V',
+  'curl --help',
+  'wget --version',
   'xdg-open "$f"',
   'open "$HOME/a.pdf"',
 ]) {
