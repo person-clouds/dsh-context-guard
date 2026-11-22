@@ -39,6 +39,7 @@
 - [x] linuxops 可选安装方案：不安装自动回退、插件只读兼容层、通过 `--binary` 接入自建/上游二进制；安装脚本不 sudo、不自动改 PATH；
 - [x] 修复「bash 全量报 `cannot get property "tools" without inject`」：`detectFileTools` 与 `registerCommandGuidance` 原先直接读 `ctx.tools`/`ctx.systemPrompt`，插件未声明 `inject` 时 cordis 代理在属性读取阶段即抛错，`tools/pre-execute` 的命令形态检查因此让所有 bash 调用失败（0.4.2 引入 `detectFileTools` 时回归）；改为优先 `ctx.get()`（无 inject 要求、取不到返回 `undefined`）并保留属性读取兜底且包在 `try` 中，同时修复命令提示段落一直未注册的问题；`test.mjs` 增加严格上下文（属性读取即抛）的单元与端到端回归用例。
 - [x] 修复替代命令提示指错工具：`tools/pre-execute` 里 `detectFileTools(ctx)` 没传 scope，取到的是全局视图，看不到按 agent 作用域注册的 `ops_*`，于是文案退化成官方 `read`/`grep`/`glob`（部分会话根本没有 `read`）；改为 `detectFileTools(ctx, exec?.agent)`，与系统提示段落拿到的 `scope` 保持一致；`test.mjs` 增加「全局视图只有 `read`、agent 视图有 `ops_*` 时 deny 文案必须是 `ops_inspect_local_file`」回归用例。
+- [x] 压缩阈值配置可自检/可重放：新增 `scripts/apply-compaction.sh`（`check` 默认只读自检、`apply` 备份后按安装包 preset 重生成覆盖块并原位替换、`dry-run` 只预告），校验四个内置 preset 的 `compaction-basic` 三字段（`thresholdRatio/retainRatio/headroomTokens`），块与安装包不一致时报 FAIL 提示 DSH 升级漂移；保留宿主已有的 `maxOutputChars`；`test.mjs` 新增 fixture 语法/全 PASS/幂等/缺字段 FAIL/dry-run 不写盘用例；文档见 `docs/context-compaction.md` 5.5。
 
 ## 待办
 
@@ -101,4 +102,6 @@
 | 2026-11-21 | tag `v0.4.4` | 已推送 `origin`；`gh` 未登录（`gh auth status` 无 host） |
 | 2026-11-21 | GitHub Release `v0.4.4` | ok；用 `GH_TOKEN=$(git credential fill ...)` 从 git credential helper 取 zhyfor PAT（token 未落盘、未打印），`gh release create` 成功；资产 `dsh-context-guard.tgz` 58586 字节，`releases/latest/download` 返回 200 |
 | 2026-11-21 | 实机验收（重启后） | `cat app.log` 被 deny，文案已是 `ops_inspect_local_file({ path, offset: 1, limit: 120 })`，说明 0.4.4 的 `exec.agent` 作用域修复生效；有界形式 `cat x \| head` 仍正常放行 |
+| 2026-11-22 | `npm test`（压缩阈值自检脚本） | ok；`apply-compaction.sh` 语法通过；fixture 空 patch 下 dry-run 不写盘、apply 后 `check` 两个 fixture preset 全 PASS、二次 apply 无变化且只一份备份、删 `thresholdRatio` 与改值 0.5 均 FAIL 并点名 preset、空 patch 报「未被覆盖」 |
+| 2026-11-22 | `bash scripts/apply-compaction.sh check`（真实 home patch） | PASS：`preset-standard/minimal/ptc/cordis` 四个内置 preset 全部通过（仅比较阈值与安装包结构，忽略注释与引号风格）；未对 `~/.dsh` 执行 apply |
 | 2026-11-22 | 实机验收（白名单 + 预设） | `dsh-web` 于 12:23:51 重启（规则文件 12:21 写入，34 条规则/30 条 host）；`curl http://192.168.31.244:8095/` 返回 200 且**未弹审批卡**，证明 host 规则由 `allowedBy: host` 摘掉 `unknown-link`/`insecure-http`；本会话切到 `ask` 后审批链路正常。离线回放 7 条历史被拒命令：4 条 curl-only 由有风险变 `none`，2 条含 `docker rm -f` 仍为 `container-delete`，1 条 `$p` 变量端口仍报 `unknown-link`（`new URL()` 解析不出主机名） |

@@ -127,7 +127,8 @@ T / (T − R) = 0.8 / (0.8 − 0.16) ≈ 1.25
 
 改法：在补丁层按 id 覆盖（本机写在 `~/.dsh/cordis.patch.yml`，web 与 superagent profile 都读）。
 **注意补丁是整行替换 `config`，不是字段合并**，省略的字段会回落 schema 默认值，需按需写全。
-改前 `cp` 备份、改后重启 `dsh web` 验证。
+改前 `cp` 备份、改后重启 `dsh web` 验证。批量改写与升级后自检用
+[`scripts/apply-compaction.sh`](../scripts/apply-compaction.sh)，见 5.5。
 
 ### 5.1 2026-11-14 实测：组内条目只能整段重写 preset
 
@@ -163,10 +164,13 @@ T / (T − R) = 0.8 / (0.8 − 0.16) ≈ 1.25
 
 修复方式：`~/.dsh/cordis.patch.yml` 同时覆盖 `standard/minimal/ptc/cordis`
 四个内置 preset；superagent 自己的 `dsh-superagent-worker` / `dsh-superagent-router`
-也补同样 config。可重复执行脚本在 `task/dsh-token-control/`。
+也补同样 config。可重复执行脚本是本仓的
+[`scripts/apply-compaction.sh`](../scripts/apply-compaction.sh)（见 5.5）；
+当时的临时脚本留在 `personalCloud/task/dsh-token-control/`，已不再推荐执行。
 
 验证判据：`--dump-config` 中每个 `id: compaction-basic` 后都必须出现
-`thresholdRatio: 0.08`；只看 `preset-standard` 不算通过。
+`thresholdRatio: 0.08`；只看 `preset-standard` 不算通过。日常自检直接跑
+`bash scripts/apply-compaction.sh check`。
 
 ### 5.4 2026-11-14 新增：压缩结果落盘为 STATUS
 
@@ -178,12 +182,39 @@ DSH 原生 `compaction-basic` 只在会话日志里写 `compaction/summary` chec
 - 监听 `compaction/summary`：把 DSH 自己生成的结构化摘要追加进同一份 `STATUS.md`，
   并另存一份带时间戳的历史文件；
 - 不额外调用模型，不增加压缩成本；
-- 默认写到 `${DSH_HOME:-$HOME/.dsh}/compaction-archive/<session-id>/STATUS.md`。
+- 默认写到 `${DSH_HOME:-$HOME/.dsh}/context-guard/archive/<session-id>/STATUS.md`。
 
 插件已安装进 `web` 与 `superagent` profile；只有实际发生压缩的会话才有归档。
+
+### 5.5 2026-11-22 新增：阈值配置可自检、可重放
+
+`~/.dsh/cordis.patch.yml` 里的 preset 覆盖块是「内置 preset 的整段拷贝」：DSH 升级后
+内置 preset 若变化（插件增删、提示词更新），旧拷贝不会报错也不会自动更新。为把这件事
+变成可重复动作，本仓提供 [`scripts/apply-compaction.sh`](../scripts/apply-compaction.sh)：
+
+| 命令 | 行为 |
+|---|---|
+| `bash scripts/apply-compaction.sh check`（默认） | 只读自检：每个内置 preset 的覆盖块是否给 `compaction-basic` 写全三个字段、是否与安装包 preset 一致（不一致提示 DSH 可能已升级）；重复的 preset 块只告警、不自动删 |
+| `bash scripts/apply-compaction.sh apply` | 先备份为 `cordis.patch.yml.bak.compaction-<时间戳>`，再按安装包 preset 重生成覆盖块并原位替换（缺失则追加），最后打印回滚命令 |
+| `bash scripts/apply-compaction.sh dry-run` | 只打印将改动的 preset，不写盘、不备份 |
+
+选项：`--presets-dir` 指定内置 preset 目录（默认从 `dsh` 可执行文件解析安装根）、
+`--patch` 指定 home patch 路径、`--profile <名> --deep` 追加 `dsh --dump-config`
+交叉核对。脚本不会被 DSH 自动执行，只由用户在自己的终端跑（AI 沙箱对 `~/.dsh` 只读）。
+
+两个注意点：
+
+- `apply` 以安装包为准重写**整块**，块内的自定义注释不会保留；
+- `apply-profile.sh` 也会改写 `preset-minimal`，且 preset 按 id 取第一个匹配块。
+  先跑 `apply-profile.sh`，再跑 `apply-compaction.sh`；后者的 `check` 只校验压缩三字段，
+  并把宿主已有的 `maxOutputChars` 按原值保留（不凭空新增）。
+
+DSH 升级后：`check` 报 FAIL 就说明拷贝已过期，`apply` 后 `check` 应回到全部 PASS，
+再重启对应 profile。
 
 ## 6. 一句话备忘
 
 - 默认 0.8 对 1M 窗口是合理值；本机已按用户要求改为 0.08（约 8 万 token 触发，见 5.1、5.3）。
+- 升级 DSH 后先跑 `bash scripts/apply-compaction.sh check`，FAIL 就 `apply` 再重启。
 - 想立刻压缩一次：用户执行 `/compact`（它做一次「低于自动阈值的有用压缩」，可反复用）。
 - 手动压缩的合适时机是**任务达到干净边界**时——此时摘要质量最好；中途压缩容易丢细节。

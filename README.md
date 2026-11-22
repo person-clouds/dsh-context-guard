@@ -63,6 +63,20 @@ dsh-context-guard/scripts/apply-profile.sh
 dsh --profile web --dump-config | grep -E "context-guard|maxOutputChars|tool-result-pruner"
 ```
 
+## 压缩阈值自检
+
+`~/.dsh/cordis.patch.yml` 覆盖了四个内置 preset 的 `compaction-basic` 阈值（`0.08/0.02/65536`）。
+这份拷贝是整段抄安装包的，DSH 升级后可能过期，用脚本自检/重放：
+
+```bash
+bash dsh-context-guard/scripts/apply-compaction.sh check     # 只读自检，全部 PASS 退出 0
+bash dsh-context-guard/scripts/apply-compaction.sh dry-run   # 看会改哪些 preset
+bash dsh-context-guard/scripts/apply-compaction.sh apply     # 备份后原位重写，打印回滚命令
+```
+
+`apply` 由用户在自己的终端执行（AI 沙箱对 `~/.dsh` 只读），插件不会自动调用。
+细节与升级后处理见 [`docs/context-compaction.md`](docs/context-compaction.md) 5.5 节。
+
 ## 输出预算
 
 默认 `thresholdChars=2000`、`headChars=1200`、`tailChars=800`，硬顶 6000。

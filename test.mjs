@@ -833,6 +833,89 @@ assert.equal(fallbackOverview.status, 0, fallbackOverview.stderr)
 assert.match(fallbackOverview.stdout, /## 系统/)
 assert.match(fallbackOverview.stdout, /kernel:/)
 
+// apply-compaction.sh：语法 + fixture 自检/应用/幂等/dry-run
+const compaction = new URL('./scripts/apply-compaction.sh', import.meta.url).pathname
+assert.equal(spawnSync('bash', ['-n', compaction]).status, 0)
+const compactRoot = await mkdtemp(join(tmpdir(), 'dsh-compaction-'))
+const presetDir = join(compactRoot, 'presets')
+await mkdir(presetDir, { recursive: true })
+await writeFile(join(presetDir, 'minimal.patch.yml'), [
+  '# fixture preset',
+  '- insert:',
+  '    - id: preset-minimal',
+  "      name: '@deepseek-ai/dsh-agent-preset'",
+  '      config:',
+  '        id: minimal',
+  '        order: 3',
+  '        plugins:',
+  '          - id: persona',
+  "            name: '@deepseek-ai/dsh-persona'",
+  '          - id: compaction',
+  '            name: cordis:group',
+  '            group: true',
+  '            config:',
+  '              - id: compaction-basic',
+  "                name: '@deepseek-ai/dsh-compaction-basic'",
+  '              - id: command-compact',
+  "                name: '@deepseek-ai/dsh-command-compact'",
+  '',
+].join('\n'))
+await writeFile(join(presetDir, 'standard.patch.yml'), [
+  '- insert:',
+  '    - id: preset-standard',
+  "      name: '@deepseek-ai/dsh-agent-preset'",
+  '      config:',
+  '        id: standard',
+  '        order: 1',
+  '        plugins:',
+  '          - id: compaction',
+  '            name: cordis:group',
+  '            group: true',
+  '            config:',
+  '              - id: compaction-basic',
+  "                name: '@deepseek-ai/dsh-compaction-basic'",
+  '',
+].join('\n'))
+const patchFile = join(compactRoot, 'cordis.patch.yml')
+await writeFile(patchFile, '')
+const runCompaction = args => spawnSync('bash', [compaction, ...args, '--presets-dir', presetDir, '--patch', patchFile], { encoding: 'utf8' })
+const dry = runCompaction(['dry-run'])
+assert.equal(dry.status, 0, dry.stderr)
+assert.match(dry.stdout, /将追加 preset-minimal/)
+assert.match(dry.stdout, /未写入/)
+assert.equal(await readFile(patchFile, 'utf8'), '')
+const applied = runCompaction(['apply'])
+assert.equal(applied.status, 0, applied.stderr)
+assert.match(applied.stdout, /已追加 preset-minimal/)
+assert.match(applied.stdout, /已备份: /)
+const checked = runCompaction(['check'])
+assert.equal(checked.status, 0, checked.stdout + checked.stderr)
+assert.match(checked.stdout, /PASS: preset-minimal/)
+assert.match(checked.stdout, /PASS: preset-standard/)
+assert.match(checked.stdout, /全部通过/)
+// 幂等：再跑一次内容不变，且不再重复备份
+const firstText = await readFile(patchFile, 'utf8')
+const again = runCompaction(['apply'])
+assert.equal(again.status, 0, again.stderr)
+assert.match(again.stdout, /无变化/)
+assert.equal(await readFile(patchFile, 'utf8'), firstText)
+assert.ok((await readdir(compactRoot)).filter(name => name.startsWith('cordis.patch.yml.bak.compaction-')).length === 1)
+// 缺字段：check 非零并点名 preset
+await writeFile(patchFile, firstText.replace(/^\s*thresholdRatio: 0\.08\n/m, ''))
+const missing = runCompaction(['check'])
+assert.equal(missing.status, 1)
+assert.match(missing.stdout, /FAIL: preset-minimal 缺少 thresholdRatio/)
+// 值不对：同样 FAIL
+await writeFile(patchFile, firstText.replace(/thresholdRatio: 0\.08/, 'thresholdRatio: 0.5'))
+const wrong = runCompaction(['check'])
+assert.equal(wrong.status, 1)
+assert.match(wrong.stdout, /thresholdRatio=0\.5，期望 0\.08/)
+// 缺整个 preset 覆盖：FAIL
+await writeFile(patchFile, '')
+const uncovered = runCompaction(['check'])
+assert.equal(uncovered.status, 1)
+assert.match(uncovered.stdout, /preset-minimal 未被 home patch 覆盖/)
+
 
 // 文档提交门禁：真实 check.sh + 临时 fixture，坏文档拒绝、修复后放行
 assert.deepEqual(parseGitCommitCommand('git commit -m x'), { cwd: null })

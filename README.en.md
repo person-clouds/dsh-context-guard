@@ -63,6 +63,21 @@ Verify:
 dsh --profile web --dump-config | grep -E "context-guard|maxOutputChars|tool-result-pruner"
 ```
 
+## Compaction threshold self-check
+
+`~/.dsh/cordis.patch.yml` overrides `compaction-basic` thresholds (`0.08/0.02/65536`) for the four
+built-in presets. Those overrides are full copies of the installed presets, so they go stale after a
+DSH upgrade. Check and replay them with:
+
+```bash
+bash dsh-context-guard/scripts/apply-compaction.sh check     # read-only, exits 0 when all PASS
+bash dsh-context-guard/scripts/apply-compaction.sh dry-run   # show which presets would change
+bash dsh-context-guard/scripts/apply-compaction.sh apply     # back up, rewrite in place, print rollback
+```
+
+`apply` is run by the user in their own terminal (the AI sandbox is read-only for `~/.dsh`); the plugin
+never calls it. See section 5.5 of [`docs/context-compaction.md`](docs/context-compaction.md) for details.
+
 ## Output budgets
 
 Defaults: `thresholdChars=2000`, `headChars=1200`, `tailChars=800`, hard cap 6000.
