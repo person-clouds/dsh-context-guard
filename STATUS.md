@@ -109,3 +109,4 @@
 | 2026-11-22 | 实机验收（白名单 + 预设） | `dsh-web` 于 12:23:51 重启（规则文件 12:21 写入，34 条规则/30 条 host）；`curl http://192.168.31.244:8095/` 返回 200 且**未弹审批卡**，证明 host 规则由 `allowedBy: host` 摘掉 `unknown-link`/`insecure-http`；本会话切到 `ask` 后审批链路正常。离线回放 7 条历史被拒命令：4 条 curl-only 由有风险变 `none`，2 条含 `docker rm -f` 仍为 `container-delete`，1 条 `$p` 变量端口仍报 `unknown-link`（`new URL()` 解析不出主机名） |
 | 2026-11-22 | `npm test`（README/npm/market 描述更新） | ok；无代码改动，回归通过 |
 | 2026-11-22 | `./scripts/check.sh --repo dsh-context-guard` | PASS（7 篇文档，0 项警告） |
+| 2026-11-22 | 修复链接检查误报（`PLAN-risk-link-scope`） | `analyzeCommand` 改为按 shell 段只对段首 `curl`/`wget`/`xdg-open` 等取链接，heredoc、引号内模式串与 Python `open(` 不再触发 `unknown-link`；`filterRiskByRules` 只统计可解析主机的 URL。回放：`329a0f0e` 的文档写入与 grep 模式命令 `risk=false`，`curl http://192.168.31.244:8095/` 由 host 规则放行，`curl http://evil.example/a` 仍确认；`npm test` ok |

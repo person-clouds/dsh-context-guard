@@ -14,7 +14,7 @@ status: current
 ## 先说最要紧的四件事
 
 **1. 风险确认（最重要）**
-`rm -rf`、`git reset --hard`、`curl | bash`、访问白名单外的主机、关机停服、删库、提权……执行前都会先弹审批。点「允许一次」只放这一条；点「始终允许」会写一条窄规则，下次同类命令不再打扰。它是在 DSH 自己的权限策略之后再兜一层，不替代权限和沙箱；规则是正则启发式，可能误报或漏报，真正的高危操作还是建议人看一眼。
+`rm -rf`、`git reset --hard`、`curl | bash`、访问白名单外的主机、关机停服、删库、提权……执行前都会先弹审批。点「允许一次」只放这一条；点「始终允许」会写一条窄规则，下次同类命令不再打扰。它是在 DSH 自己的权限策略之后再兜一层，不替代权限和沙箱；规则是正则启发式，可能误报或漏报，真正的高危操作还是建议人看一眼。链接检查只认命令段首的取链动作（`curl`/`wget`/`xdg-open` 等），文档正文、heredoc 和引号内的模式串不算访问链接。
 
 **2. 去重**
 同一 session + 同一工具 + 同一参数，10 分钟内结果没变，只回「上次那个」的指针；结果变了只回行级 diff。命令每次都真实执行，缓存只省上下文，不影响结果。
@@ -78,7 +78,7 @@ dsh --profile web --dump-config | grep -E "context-guard|maxOutputChars|tool-res
 本机（2026-11-22 起）按「完全权限 + 需要时弹审批」运行，靠两处配置配合，改完都要重启 `dsh-web`：
 
 - **权限预设**：`~/.dsh/profiles/web/cordis.patch.yml` 里 `permission` 插件的 `full-access-ask` 预设（`sandbox: danger-full-access` + `approval: ask`），并用 `defaultPreset: full-access-ask` 设为新会话默认。原来的 `danger-full-access` 是 `approval: never`，会让风险确认在毫秒内被自动拒绝，报 `the user rejected tool "bash"`。
-- **风险白名单**：`~/.dsh/context-guard/risk-allow.json` 里 `kind: "host"` 规则（与审批卡「始终允许」同一文件），增量叠加内置默认 `config/risk-allow-default.json`，例如 `192.168.31.244`、`100.84.98.28`、`zh-gem-r7.tailb6e152.ts.net`。host 规则只在一条命令里所有 URL 主机都在白名单内时才摘掉 `unknown-link`/`insecure-http`；`RiskRuleStore` 只在进程启动时读一次，手工编辑后需重启。
+- **风险白名单**：`~/.dsh/context-guard/risk-allow.json` 里 `kind: "host"` 规则（与审批卡「始终允许」同一文件），增量叠加内置默认 `config/risk-allow-default.json`，例如 `192.168.31.244`、`100.84.98.28`、`zh-gem-r7.tailb6e152.ts.net`。host 规则只在一条命令里所有可解析的 URL 主机都在白名单内时才摘掉 `unknown-link`/`insecure-http`；占位符/模式串这类 `new URL()` 解析不出主机的字符串不参与判定，但整条命令没有可解析主机时仍按原判。`RiskRuleStore` 只在进程启动时读一次，手工编辑后需重启。
 
 ## 输出预算
 

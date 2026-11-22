@@ -252,6 +252,21 @@ assert.ok(analyzeCommand('curl https://evil.example/data').reasons.some(reason =
 assert.equal(analyzeCommand('curl -I https://github.com/person-clouds/dsh-context-guard').risk, false)
 assert.equal(analyzeCommand('curl -s http://127.0.0.1:3080/health').risk, false)
 assert.ok(analyzeCommand('curl http://evil.example/a').reasons.some(reason => reason.code === 'insecure-http'))
+// 链接检查只看真实 fetch 段：heredoc 正文、引号内模式串、Python open( 不算访问链接
+const docWriteCommand = [
+  "cd /home/zh/www/personalCloud && python3 - <<'EOF'",
+  "p='doc/service-ports.md'",
+  "s=open(p,encoding='utf-8').read()",
+  "s+='| 2283 | Immich | `http://192.168.31.244:2283` |'",
+  "open(p,'w').write(s)",
+  'EOF',
+].join('\n')
+assert.equal(analyzeCommand(docWriteCommand).risk, false)
+assert.equal(analyzeCommand("grep -o 'https://[^:]*:[^@]*@github.com' ~/.git-credentials | head -1").risk, false)
+assert.ok(analyzeCommand('curl "http://evil.example/a"').reasons.some(reason => reason.code === 'unknown-link'))
+assert.ok(analyzeCommand('bash -c "curl http://evil.example/a"').reasons.some(reason => reason.code === 'unknown-link'))
+assert.ok(analyzeCommand('sudo curl http://evil.example/a').reasons.some(reason => reason.code === 'insecure-http'))
+assert.ok(analyzeCommand('xargs -n1 curl http://evil.example/a').reasons.some(reason => reason.code === 'unknown-link'))
 // 临时目录 rm 放行与仍需拦截的边界
 assert.equal(analyzeCommand('rm -rf /tmp/foo').risk, false)
 assert.equal(analyzeCommand('rm -rf /var/tmp/foo').risk, false)
@@ -417,6 +432,11 @@ assert.ok(hostRules.every(rule => rule.kind === 'host' && rule.host === 'evil.ex
 await ruleStore.add(hostRules)
 assert.equal(filterRiskByRules(analyzeCommand('curl https://evil.example/b'), 'curl https://evil.example/b', ruleStore).risk, false)
 assert.equal(filterRiskByRules(analyzeCommand('curl https://other.example/b'), 'curl https://other.example/b', ruleStore).risk, true)
+// 不可解析的占位/模式串不参与主机放行判定：其余可解析主机都在白名单时仍应静默
+const placeholderCommand = 'curl https://evil.example/b https://…ts.net:8082'
+assert.equal(analyzeCommand(placeholderCommand).risk, true)
+assert.equal(filterRiskByRules(analyzeCommand(placeholderCommand), placeholderCommand, ruleStore).risk, false)
+assert.equal(filterRiskByRules(analyzeCommand('curl https://…ts.net:8082'), 'curl https://…ts.net:8082', ruleStore).risk, true)
 // 内置默认主机与用户 host 规则取并集：同一命令里两种来源的主机都放行
 const unionCommand = 'curl https://github.com/person-clouds https://evil.example/c'
 assert.equal(analyzeCommand(unionCommand).risk, true)
