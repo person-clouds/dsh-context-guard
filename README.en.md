@@ -268,15 +268,16 @@ bash dsh-context-guard/scripts/apply-compaction.sh apply     # back up, rewrite 
 
 ## Verify mode and duplicate dispatch
 
-A session whose title matches `sessionBudgets[].match` enters verify mode (default `^(?:TODO[：:]\s*)?V[：:]`, i.e. the `V:` sessions opened by `/V`):
+A session enters verify mode only when its title matches `sessionBudgets[].match`. The default is one example rule: `^(?:TODO[：:]\s*)?V[：:]` — a full-width or half-width colon after `V` both match, and a `TODO：` / `TODO:` prefix does not break matching; other titles such as `D：` or `G：` do not match and keep the global defaults. The default rule can be replaced through the `sessionBudgets` config (`match` / `denyTools` / `denyCommands` are replaced per rule).
 
-- Tighter budgets: reminder at the 25th `bash` call, hard deny at the 40th, and per-turn output above 20000 chars is reduced to a summary;
+- Entry point: the guard ships no command. With `dsh-workflow-shortcuts` ≥ `0.4.0`, `/V` (implementation verify, title `V：…`) and `/VP` (plan verify, title `V：计划：…`) write the title; with only the guard installed, renaming the session title to `V：…` by hand works just the same, because every title written by any client is matched by the same regex.
+- Tighter budgets: by default a reminder at the 25th `bash` call, a hard deny at the 40th, and per-turn output above 20000 chars is reduced to a summary;
 - Read-only: `denyTools` (`write`, `edit` by default) and `denyCommands` (installs, `git commit/push/add`, service restarts) are denied;
-- A `TODO：` prefix does not break matching; sessions without `V:` keep the global defaults (80 / 160 / 40000).
+- Sessions without `V：` keep the global defaults (80 / 160 / 40000).
 
-Duplicate dispatch: when the prompt of a `dispatchTools` call (`subagent`, `subagent_fork`, `workflow`) declares `快照：<sha>`, a second dispatch with the same fingerprint in the same session within 2 hours is denied, so one diff is not reviewed twice; prompts containing `verify-again`, or without a snapshot, are not blocked.
+The 25 / 40 / 20000 above only describe the default rule and stop applying once you change the config; thresholds live only in `DEFAULT_SESSION_BUDGETS` (`lib/verify-mode.js`), and docs reference them instead of treating them as a contract repeated in skills.
 
-Thresholds live only in `DEFAULT_SESSION_BUDGETS` (`lib/verify-mode.js`); skill docs reference them instead of repeating numbers.
+Duplicate dispatch: when the prompt of a `dispatchTools` call (`subagent`, `subagent_fork`, `workflow`) declares `快照：<sha>`, a second dispatch with the same fingerprint in the same session within 2 hours is denied, so one diff is not reviewed twice; prompts containing `verify-again`, or without a snapshot, are not blocked. The `/VP` plan-verify prompt deliberately omits `快照：<sha>`, so the same plan can be reviewed again and again and does not take part in duplicate-dispatch blocking; the cost is that repeated reviews consume the verify budget.
 
 ## Tests
 
@@ -284,7 +285,7 @@ Thresholds live only in `DEFAULT_SESSION_BUDGETS` (`lib/verify-mode.js`); skill 
 cd dsh-context-guard && npm test
 ```
 
-Coverage: compaction archive, command classification/budgets, bounded rendering, large-output archival, deduplication, line-level diffs, per-turn call and output gates, hard-limit auto-fill and its 3-use budget, command-shape deny/ask with merged `ask`, metrics, expiry cleanup, risky-command detection and narrow allow rules, documentation commit guard, `inspect.sh` syntax/help, and the Web client script.
+Coverage: compaction archive, command classification/budgets, bounded rendering, large-output archival, deduplication, line-level diffs, per-turn call and output gates, hard-limit auto-fill and its 3-use budget, command-shape deny/ask with merged `ask`, metrics, expiry cleanup, risky-command detection and narrow allow rules, documentation commit guard, the verify-mode title contract (`V：`, `TODO：V：`, `V：计划：` match; `D：`, `G：` do not), `inspect.sh` syntax/help, and the Web client script.
 
 ## Boundaries
 

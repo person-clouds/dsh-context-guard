@@ -268,15 +268,16 @@ bash dsh-context-guard/scripts/apply-compaction.sh apply     # 备份后原位�
 
 ## 核验态与派单去重
 
-会话标题命中 `sessionBudgets[].match` 时进入核验态（默认 `^(?:TODO[：:]\s*)?V[：:]`，即 `/V` 命令开出的 `V:` 会话）：
+只有会话标题命中 `sessionBudgets[].match` 才进入核验态。默认规则是一条示例：`^(?:TODO[：:]\s*)?V[：:]`——`V` 后全角、半角冒号都命中，`TODO：` / `TODO:` 前缀不影响；`D：`、`G：` 等其它标题不命中，保持全局默认。默认规则可被配置里的 `sessionBudgets` 覆盖（`match` / `denyTools` / `denyCommands` 按规则整体替换）。
 
-- 预算收紧：第 25 次 `bash` 提醒、第 40 次硬拒、单轮输出超过 20000 字符后只留摘要；
+- 入口：guard 不提供命令入口。装配套 `dsh-workflow-shortcuts` ≥ `0.4.0` 后由 `/V`（实施核验，标题 `V：…`）与 `/VP`（计划核验，标题 `V：计划：…`）写入标题；只装 guard 时手动把会话标题改成 `V：…` 同样生效，任何客户端写入的标题都按同一正则匹配。
+- 预算收紧：默认第 25 次 `bash` 提醒、第 40 次硬拒、单轮输出超过 20000 字符后只留摘要；
 - 只读：`denyTools`（默认 `write`、`edit`）与 `denyCommands`（装依赖、`git commit/push/add`、重启服务）直接 `deny`；
-- 标题被加 `TODO：` 前缀后仍匹配；非 `V:` 会话保持全局默认（80 / 160 / 40000）。
+- 非 `V：` 会话保持全局默认（80 / 160 / 40000）。
 
-派单去重：`dispatchTools`（默认 `subagent`、`subagent_fork`、`workflow`）的 prompt 里声明「快照：`<sha>`」时，同会话同指纹 2 小时内的第二次派单直接 `deny`，避免同一 diff 重复核验；prompt 含 `verify-again` 或未声明快照时不拦。
+上面的 25 / 40 / 20000 只是默认规则的取值说明，改配置即失效；阈值只在 `lib/verify-mode.js` 的 `DEFAULT_SESSION_BUDGETS` 维护，文档只引用，不把它当契约重复写进技能。
 
-阈值只在 `lib/verify-mode.js` 的 `DEFAULT_SESSION_BUDGETS` 维护，技能文档只引用，不重复数字。
+派单去重：`dispatchTools`（默认 `subagent`、`subagent_fork`、`workflow`）的 prompt 里声明「快照：`<sha>`」时，同会话同指纹 2 小时内的第二次派单直接 `deny`，避免同一 diff 重复核验；prompt 含 `verify-again` 或未声明快照时不拦。`/VP` 的计划核验提示词刻意不写 `快照：<sha>`，同一计划可反复审、不参与派单去重；代价是重复审查会消耗核验预算。
 
 ## 测试
 
@@ -284,7 +285,7 @@ bash dsh-context-guard/scripts/apply-compaction.sh apply     # 备份后原位�
 cd dsh-context-guard && npm test
 ```
 
-覆盖：压缩归档、命令分类/预算、有界渲染、大输出落盘、去重、行级 diff、单轮调用与累计输出门禁、硬上限自动「继续」标记与 3 次预算、命令形态 deny/ask 与合并 `ask`、指标、过期清理、风险命令识别与窄放行规则、文档提交门禁、`inspect.sh` 语法与帮助、Web 客户端语法。
+覆盖：压缩归档、命令分类/预算、有界渲染、大输出落盘、去重、行级 diff、单轮调用与累计输出门禁、硬上限自动「继续」标记与 3 次预算、命令形态 deny/ask 与合并 `ask`、指标、过期清理、风险命令识别与窄放行规则、文档提交门禁、核验态标题契约（`V：`、`TODO：V：`、`V：计划：` 命中，`D：`、`G：` 不命中）、`inspect.sh` 语法与帮助、Web 客户端语法。
 
 ## 边界
 

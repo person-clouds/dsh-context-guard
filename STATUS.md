@@ -1,5 +1,6 @@
 # STATUS — dsh-context-guard
 
+- 版本：`0.5.0`（本地已就绪，待发布；`npm publish` 需用户 2FA）
 - 更新时间：2026-11-22
 - 一句话：DSH 工具输出预算/落盘、去重、单轮调用/输出门禁、硬上限后 Web 自动填入「继续」、命令形态拦截、风险确认与窄规则自动放行、内置放行默认值外置、只读诊断、压缩归档与指标。
 - 位置：`dsh-context-guard/`；web profile 已按 link 加载并完成「始终允许」实机验证，superagent profile 待重启后核对。
@@ -42,6 +43,7 @@
 - [x] 压缩阈值配置可自检/可重放：新增 `scripts/apply-compaction.sh`（`check` 默认只读自检、`apply` 备份后按安装包 preset 重生成覆盖块并原位替换、`dry-run` 只预告），校验四个内置 preset 的 `compaction-basic` 三字段（`thresholdRatio/retainRatio/headroomTokens`），块与安装包不一致时报 FAIL 提示 DSH 升级漂移；保留宿主已有的 `maxOutputChars`；`test.mjs` 新增 fixture 语法/全 PASS/幂等/缺字段 FAIL/dry-run 不写盘用例；文档见 `docs/context-compaction.md` 5.5。
 - [x] 核验态硬上限（2026-11-22）：会话标题命中 `sessionBudgets[].match`（默认 `^(?:TODO[：:]\s*)?V[：:]`）时自动切换预算 `25 提醒 / 40 硬拒 / 单轮 20000 chars`，并 `deny` `write`/`edit` 与装依赖、`git commit|push|add`、重启服务；标题由 `/V` 命令或手工改名设置，标题缓存 5 秒 TTL，非核验会话保持全局 `80/160/40000`；新增 `lib/verify-mode.js`（规则编译、指纹、派单登记）与 `turn-budget.budgetFor` 按会话覆盖；
 - [x] 重复派单硬拦（2026-11-22）：`subagent`/`subagent_fork`/`workflow` 的 prompt 声明「快照：`<sha>`」时，同会话同指纹 2 小时内第二次派单直接 `deny`（唯一能在 `tools/pre-execute` 拒绝的层就是本插件），prompt 含 `verify-again` 或未声明快照不拦；`test.mjs` 增加规则编译/标题匹配/指纹/窗口过期/去重与端到端用例。
+- [x] 核验态契约与版本对齐（2026-11-22，0.5.0）：标题正则 `^(?:TODO[：:]\s*)?V[：:]` 由 `test.mjs` 字面契约锁住（`V：`、`TODO：V：`、`V：计划：` 命中，`D：` / `G：` 不命中）；README 中英双份写明标题由外部写入（配套 `dsh-workflow-shortcuts` ≥ `0.4.0` 提供 `/V`、`/VP`，只装本插件时手动改名同样生效）、默认 `sessionBudgets` 是可覆盖的示例规则、`/VP` 提示词不写快照故不参与派单去重；`package.json` 升 `0.5.0`；原有预算数字、`deny` 列表与派单去重行为未改。
 
 ## 待办
 
@@ -59,7 +61,8 @@
 | 10 | ~~重启后回放链接检查~~ | 已完成：2026-11-22 16:44:49 重启（PID 414812，晚于 `d725d4c`）。真实入口回放：`cat <<'EOF' \| env bash` 正文含未放行链接 → 弹出 `context-guard risk check (medium): unknown-link, insecure-http`（修前静默放过）；白名单内 `curl http://192.168.31.244:2283/api/health` 放行无卡；整文件 `cat` 仍被 lint 拦。见验证记录 2026-11-22 17:05 |
 | 11 | 文本经管道喂给 shell 的漏报 | `printf 'curl http://evil.example' \| bash`、`echo "$CMD" \| bash` 仍判 `none`（重启后实测无卡）：字面量文本进 shell 后不做二次解析。属已知边界；如需覆盖，按「管道上一段的字面量参数当作一段命令递归分析」实现（注意自引用循环与成本）。`PLAN-risk-link-scope.md` 的 15:58 已订正为 15:43 |
 | 12 | host 规则命中仍弹一次卡 | 2026-11-22 16:49 观察：`unknown.example` 已在 `risk-allow.json`，`curl http://unknown.example/x` 仍弹卡且 reason 带 `rule-token`、决策 `allowed-once`。离线 `filterRiskByRules` 判定为已放行，疑似运行期规则加载时序；不影响安全性，待复现时确认 |
-| 13 | 核验态与派单去重实机验证 | 需重启 DSH 后：把会话标题改成 `V: 测试`，确认 `write`/`npm install` 被 `deny`、第 25 次 bash 提醒、第 40 次硬拒；同一 prompt 带「快照：`abc1234`」连派两次 `subagent`，第二次应 `deny` 且加 `verify-again` 可放行 |
+| 13 | 核验态与派单去重实机验证 | 需重启 DSH 后：把会话标题改成 `V：测试`，确认 `write`/`npm install` 被 `deny`、第 25 次 bash 提醒、第 40 次硬拒；同一 prompt 带「快照：`abc1234`」连派两次 `subagent`，第二次应 `deny` 且加 `verify-again` 可放行；`V：计划：…`（`/VP`）只读生效、提示词无 `快照：`，同一计划可再次 `/VP` 不被去重拦截 |
+| 14 | 发布 `0.5.0` | 本地已就绪、**待发布**：`npm publish` 需用户 2FA；发布后补 GitHub Release `v0.5.0`，核对 npm 版本与市场 `latest` 链接，再按待办 13 做实机回放 |
 
 ## 验证记录
 
@@ -120,3 +123,5 @@
 | 2026-11-22 | 动态判定误报修正（`d725d4c`） | `unverifiable-fetch`/`dynamic` 只看选项以外的位置参数：补齐 curl/wget 的取值选项（token、限速、`--json`、代理凭据等），`--oauth2-bearer "$TOKEN"`、`wget --method "$M"` 不再弹卡；`curl --version`/`-V`/`--help`、`wget --version` 因没有目标也不再报；`curl -K cfg`、`wget -i urls.txt` 仍报（URL 从文件读）。`npm test` ok，`./scripts/check.sh --repo dsh-context-guard` PASS |
 | 2026-11-22 | 独立复核 `98de266`（复现 12 组探针） | `cat <<'EOF' \| env bash`、`\| sudo -u root sh`、`\| nice busybox sh` 均从静默 `none` 变为 `medium`，`\| tee notes.md` 仍按文档放行；`curl "$URL"`、`echo u \| xargs curl`、`curl //evil.example/x` 报 `unverifiable-fetch`；`npm test` ok。仍未覆盖：`printf 'curl …' \| bash`、`echo "$CMD" \| bash`（见待办 11）。运行进程 15:00:09 启动，改动未加载，待重启（待办 10） |
 | 2026-11-22 17:05 | 重启后真实入口回放（`dsh web` PID 414812，16:44:49 启动） | `cat <<EOF | env bash` 正文含 `http://evil.example/probe` → 弹 `context-guard risk check (medium): unknown-link, insecure-http`，决策 `allowed-once`（修前该写法静默放过）；白名单 `curl http://192.168.31.244:2283/api/health` 无卡返回 404；整文件 `cat` 仍被 lint 拦；`printf "" | bash` 仍无卡（待办 11）。插件加载路径确认为软链 `~/.dsh/profiles/web/node_modules/@fenghoer/dsh-context-guard -> /home/zh/www/dsh-context-guard` |
+| 2026-11-22 | `npm test`（0.5.0 核验态契约） | ok；新增标题契约断言：`V：`、`TODO：V：`、`V：计划：` 命中核验规则，`D：` / `G：` 不命中 |
+| 2026-11-22 | `./scripts/check.sh --repo dsh-context-guard` | PASS（8 篇文档，1 项警告：`README.md` 296 行超过 150 行建议上限，属既有篇幅，非本次新增断链） |

@@ -1,6 +1,6 @@
 # 发布到 DSH 插件市场
 
-> 状态：**npm `@fenghoer/dsh-context-guard@0.4.4` 已发布；tag `v0.4.4` 已推送，GitHub Release `v0.4.4` 已发布（资产 `dsh-context-guard.tgz` 58586 字节，`latest/download` 返回 200）；`v0.4.1` Release 与 awesome-dsh-plugin PR #15266 已存在。**
+> 状态：**`0.5.0` 待发布（`npm publish` 需用户 2FA）；上一版 `0.4.4` 已发布，tag 与 GitHub Release `v0.4.4` 已推送（资产 `dsh-context-guard.tgz` 58586 字节，`latest/download` 返回 200）。**
 > 目标仓库：`person-clouds/dsh-context-guard`
 > npm 包名：`@fenghoer/dsh-context-guard`（npm 上 `dsh-context-guard` 已被其他项目占用）
 
@@ -39,7 +39,7 @@ GitHub 仓库添加 topic：`dsh-plugin`。
 cd /home/zh/www/dsh-context-guard
 npm test
 npm pack --pack-destination release
-# 产物：release/fenghoer-dsh-context-guard-0.4.4.tgz
+# 产物：release/fenghoer-dsh-context-guard-0.5.0.tgz
 ```
 
 ## 三、发布 npm（需要先登录）
@@ -51,7 +51,7 @@ npm publish --registry=https://registry.npmjs.org --access public
 
 ## 四、创建 GitHub Release
 
-- tag：`v0.4.4`
+- tag：`v0.5.0`（发布 0.5.0 时创建；历史 tag 见 STATUS）
 - 上传 `dsh-context-guard.tgz`（源码 tarball，无版本号文件名）
 - Release 资源名建议保持无版本号：`dsh-context-guard.tgz`
 
