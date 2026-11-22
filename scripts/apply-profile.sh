@@ -95,12 +95,69 @@ text = re.sub(
 )
 changed = True if 'hardMaxCallsPerTurn: 160' in text else changed
 
-# 1c) 旧默认阈值（20/80）升级为 80/160，重复执行幂等。
-text_before_upgrade = text
-text = text.replace('maxCallsPerTurn: 20', 'maxCallsPerTurn: 80')
-text = text.replace('hardMaxCallsPerTurn: 80', 'hardMaxCallsPerTurn: 160')
-if text != text_before_upgrade:
-    changed = True
+# 1c) 旧默认阈值（20/80）升级为 80/160，只改 context-guard 块，重复执行幂等。
+#     不能全局替换：各 profile 可能已手动调过（web 是 40/80），全局替换会改成 40/160。
+lines = text.splitlines()
+cg_start = next((i for i, line in enumerate(lines) if line.strip() == '- id: context-guard'), None)
+if cg_start is not None:
+    indent = len(lines[cg_start]) - len(lines[cg_start].lstrip())
+    cg_end = cg_start + 1
+    while cg_end < len(lines):
+        line = lines[cg_end]
+        if line.strip() and len(line) - len(line.lstrip()) <= indent and line.lstrip().startswith('- '):
+            break
+        cg_end += 1
+    if any(lines[i].strip() == 'maxCallsPerTurn: 20' for i in range(cg_start, cg_end)):
+        for i in range(cg_start, cg_end):
+            lines[i] = lines[i].replace('maxCallsPerTurn: 20', 'maxCallsPerTurn: 80')
+            lines[i] = lines[i].replace('hardMaxCallsPerTurn: 80', 'hardMaxCallsPerTurn: 160')
+        text = chr(10).join(lines)
+        changed = True
+
+# 1d) context-guard 配置补 sessionBudgets（D：会话 25/40）。配置整体替换默认规则，
+#     所以必须同时写回默认 V： 规则；已有 sessionBudgets 时不动。
+NL = chr(10)
+BS = chr(92)
+lines = text.splitlines()
+cg_start = next((i for i, line in enumerate(lines) if line.strip() == '- id: context-guard'), None)
+if cg_start is not None:
+    indent = len(lines[cg_start]) - len(lines[cg_start].lstrip())
+    cg_end = cg_start + 1
+    while cg_end < len(lines):
+        line = lines[cg_end]
+        if line.strip() and len(line) - len(line.lstrip()) <= indent and line.lstrip().startswith('- '):
+            break
+        cg_end += 1
+    if not any(line.strip().startswith('sessionBudgets:') for line in lines[cg_start:cg_end]):
+        config_index = next((i for i in range(cg_start, cg_end) if lines[i].strip() == 'config:'), None)
+        if config_index is None:
+            entry_indent = len(lines[cg_start]) - len(lines[cg_start].lstrip())
+            lines.insert(cg_start + 1, ' ' * (entry_indent + 2) + 'config:')
+            config_index = cg_start + 1
+        key_indent = len(lines[config_index]) - len(lines[config_index].lstrip()) + 2
+        item_indent = key_indent + 2
+        sub_indent = item_indent + 2
+        # 正则里的反斜杠用 chr(92) 拼，避免 HEREDOC 与 Python 两层转义。
+        rules = [
+            ' ' * key_indent + 'sessionBudgets:',
+            ' ' * item_indent + "- match: '^(?:TODO[：:]" + BS + "s*)?D[：:]'",
+            ' ' * sub_indent + 'label: 讨论会话',
+            ' ' * sub_indent + 'maxCallsPerTurn: 25',
+            ' ' * sub_indent + 'hardMaxCallsPerTurn: 40',
+            ' ' * item_indent + "- match: '^(?:TODO[：:]" + BS + "s*)?V[：:]'",
+            ' ' * sub_indent + 'label: 核验会话',
+            ' ' * sub_indent + 'maxCallsPerTurn: 25',
+            ' ' * sub_indent + 'hardMaxCallsPerTurn: 40',
+            ' ' * sub_indent + 'maxTurnOutputChars: 20000',
+            ' ' * sub_indent + 'denyTools: [write, edit]',
+            ' ' * sub_indent + 'denyCommands:',
+            ' ' * sub_indent + "  - '^" + BS + "s*(npm|pnpm|yarn)" + BS + "s+(i|install|ci)" + BS + "b'",
+            ' ' * sub_indent + "  - '^" + BS + "s*git" + BS + "s+(commit|push|add)" + BS + "b'",
+            ' ' * sub_indent + "  - '" + BS + "bsystemctl" + BS + "s+(--user" + BS + "s+)?(restart|stop|start|reload)" + BS + "b'",
+        ]
+        lines[config_index + 1:config_index + 1] = rules
+        text = NL.join(lines)
+        changed = True
 
 # 2) persistent-bash 不在 profile 顶层，旧写法会报 patch: entry not found。
 #    删除旧块，改为覆盖 minimal preset 的完整 plugins 列表。

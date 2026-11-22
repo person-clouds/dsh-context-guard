@@ -245,7 +245,7 @@ bash dsh-context-guard/scripts/apply-compaction.sh apply     # back up, rewrite 
         hardMaxCallsPerTurn: 160         # hard deny + auto-fill "continue" at call 160
         maxTurnOutputChars: 40000
         exhaustedOutputChars: 800
-        # sessionBudgets: see "Verify mode"; V: sessions default to 25/40/20000
+        # sessionBudgets: replaces the default rules; see "Verify mode"; V: sessions default to 25/40/20000
         # dispatchGuard: {enabled: true, windowMs: 7200000, overrideToken: verify-again}
         commandLintEnabled: true
         commandLintMode: deny      # deny (default, hard block) | ask (confirm complex workflows)
@@ -274,8 +274,9 @@ A session enters verify mode only when its title matches `sessionBudgets[].match
 - Tighter budgets: by default a reminder at the 25th `bash` call, a hard deny at the 40th, and per-turn output above 20000 chars is reduced to a summary;
 - Read-only: `denyTools` (`write`, `edit` by default) and `denyCommands` (installs, `git commit/push/add`, service restarts) are denied;
 - Sessions without `V：` keep the global defaults (80 / 160 / 40000).
+- `D：` sessions: `scripts/apply-profile.sh` also writes a `D：` / `TODO D：` rule (25 / 40, no `denyTools`, so plans can be written); `sessionBudgets` replaces the defaults as a whole, so keep the `V：` rule when customizing.
 
-The 25 / 40 / 20000 above only describe the default rule and stop applying once you change the config; thresholds live only in `DEFAULT_SESSION_BUDGETS` (`lib/verify-mode.js`), and docs reference them instead of treating them as a contract repeated in skills.
+The 25 / 40 / 20000 above only describe the default rule and stop applying once you change the config; the defaults live only in `DEFAULT_SESSION_BUDGETS` (`lib/verify-mode.js`), and once a profile writes `sessionBudgets` the config wins.
 
 Duplicate dispatch: when the prompt of a `dispatchTools` call (`subagent`, `subagent_fork`, `workflow`) declares `快照：<sha>`, a second dispatch with the same fingerprint in the same session within 2 hours is denied, so one diff is not reviewed twice; prompts containing `verify-again`, or without a snapshot, are not blocked. The `/VP` plan-verify prompt deliberately omits `快照：<sha>`, so the same plan can be reviewed again and again and does not take part in duplicate-dispatch blocking; the cost is that repeated reviews consume the verify budget.
 

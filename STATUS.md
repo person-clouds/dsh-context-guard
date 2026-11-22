@@ -45,6 +45,7 @@
 - [x] 核验态硬上限（2026-11-22）：会话标题命中 `sessionBudgets[].match`（默认 `^(?:TODO[：:]\s*)?V[：:]`）时自动切换预算 `25 提醒 / 40 硬拒 / 单轮 20000 chars`，并 `deny` `write`/`edit` 与装依赖、`git commit|push|add`、重启服务；标题由 `/V` 命令或手工改名设置，标题缓存 5 秒 TTL，非核验会话保持全局 `80/160/40000`；新增 `lib/verify-mode.js`（规则编译、指纹、派单登记）与 `turn-budget.budgetFor` 按会话覆盖；
 - [x] 重复派单硬拦（2026-11-22）：`subagent`/`subagent_fork`/`workflow` 的 prompt 声明「快照：`<sha>`」时，同会话同指纹 2 小时内第二次派单直接 `deny`（唯一能在 `tools/pre-execute` 拒绝的层就是本插件），prompt 含 `verify-again` 或未声明快照不拦；`test.mjs` 增加规则编译/标题匹配/指纹/窗口过期/去重与端到端用例。
 - [x] 核验态契约与版本对齐（2026-11-22，0.5.0）：标题正则 `^(?:TODO[：:]\s*)?V[：:]` 由 `test.mjs` 字面契约锁住（`V：`、`TODO：V：`、`V：计划：` 命中，`D：` / `G：` 不命中）；README 中英双份写明标题由外部写入（配套 `dsh-workflow-shortcuts` ≥ `0.4.0` 提供 `/V`、`/VP`，只装本插件时手动改名同样生效）、默认 `sessionBudgets` 是可覆盖的示例规则、`/VP` 提示词不写快照故不参与派单去重；`package.json` 升 `0.5.0`；原有预算数字、`deny` 列表与派单去重行为未改。
+- [x] D：会话预算（2026-11-22，配置级）：`scripts/apply-profile.sh` 幂等写入 `sessionBudgets`——`D：` / `TODO D：` 25/40 且不设 `denyTools`（D 会话仍要写计划），并原样写回默认 `V：` 规则（配置整体替换默认，不能只写 D）；旧阈值迁移（1c）收窄到 context-guard 块，web 已调的 40/80 不再被改成 40/160；插件默认值与 `test.mjs` 契约不变（`D：` / `G：` 仍不命中原生规则，D 只在写了配置的 profile 生效）。
 
 ## 待办
 
@@ -126,3 +127,6 @@
 | 2026-11-22 17:05 | 重启后真实入口回放（`dsh web` PID 414812，16:44:49 启动） | `cat <<EOF | env bash` 正文含 `http://evil.example/probe` → 弹 `context-guard risk check (medium): unknown-link, insecure-http`，决策 `allowed-once`（修前该写法静默放过）；白名单 `curl http://192.168.31.244:2283/api/health` 无卡返回 404；整文件 `cat` 仍被 lint 拦；`printf "" | bash` 仍无卡（待办 11）。插件加载路径确认为软链 `~/.dsh/profiles/web/node_modules/@fenghoer/dsh-context-guard -> /home/zh/www/dsh-context-guard` |
 | 2026-11-22 | `npm test`（0.5.0 核验态契约） | ok；新增标题契约断言：`V：`、`TODO：V：`、`V：计划：` 命中核验规则，`D：` / `G：` 不命中 |
 | 2026-11-22 | `./scripts/check.sh --repo dsh-context-guard` | PASS（8 篇文档，1 项警告：`README.md` 296 行超过 150 行建议上限，属既有篇幅，非本次新增断链） |
+| 2026-11-22 | `apply-profile.sh` 增加 D：会话预算（fixture 实跑） | PASS：以真实 web profile 副本跑脚本，diff 仅新增 15 行 `sessionBudgets`（D 25/40 + V 25/40/20000 + `denyTools` + 3 条 `denyCommands`），原有 `40/80` 未变；二次执行不重复插入；`20/80` 迁移用例只在块内改为 `80/160`。用安装包 `yaml` 解析加 `lib/verify-mode.js` 的 `compileBudgetRules`/`matchBudget` 验证：`D：`、`TODO：D：` 命中讨论会话，`V：`、`V：计划：` 命中核验会话（`denyTools` 与 3 条 `denyCommands` 保留），`G：` 与无冒号 `D` 走全局默认 |
+| 2026-11-22 | `npm test`（仅脚本/文档改动） | ok；插件代码未改，回归通过 |
+| 2026-11-22 | `./scripts/check.sh --repo dsh-context-guard --changed` | PASS（见提交前输出；`README.md` 超行数属既有篇幅） |
