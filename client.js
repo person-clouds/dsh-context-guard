@@ -285,11 +285,15 @@ window.__ModuleLoader__.load({
       }
       const kinds = Array.isArray(body.rules) ? [...new Set(body.rules.map(rule => rule.kind))] : []
       const summary = describeRuleKinds(kinds)
+      // 未勾「仅完整命令」却只落 command：说明没有可放宽的主机/安全类别，避免用户误以为勾选失效
+      const fallback = choice.scope !== 'command' && kinds.length === 1 && kinds[0] === 'command'
+        ? '（未识别出可放宽的主机或安全类别）'
+        : ''
       if (slow) {
         const seconds = ((Date.now() - startedAt) / 1000).toFixed(1)
-        showNotice(`「始终允许」已保存（耗时 ${seconds} 秒）：${summary}。`)
+        showNotice(`「始终允许」已保存（耗时 ${seconds} 秒）：${summary}${fallback}。`)
       } else {
-        showNotice(`「始终允许」已保存：${summary}。`)
+        showNotice(`「始终允许」已保存：${summary}${fallback}。`)
       }
       await approval.answer('allowed-once')
     }

@@ -598,6 +598,29 @@ for (const unprovable of [
   assert.ok(analyzeCommand(unprovable).reasons.some(reason => reason.code === 'unverifiable-fetch'), `目标不可证明应确认：${unprovable}`)
   assert.equal(filterRiskByRules(analyzeCommand(unprovable), unprovable, ruleStore).risk, true, `目标不可证明不得静默放行：${unprovable}`)
 }
+// 无 scheme 的 fetch 目标按 HTTP 归一：白名单主机直接放行，未放行域名走 unknown-link 并落 host 规则
+for (const local of [
+  'curl -s 127.0.0.1:11434/api/tags',
+  'curl -s localhost:8080/health',
+  'wget -q 127.0.0.1:8080/x',
+  'curl "[::1]:8080/x"',
+]) {
+  assert.equal(analyzeCommand(local).risk, false, `无 scheme 白名单主机不应报风险：${local}`)
+  assert.equal(filterRiskByRules(analyzeCommand(local), local, ruleStore).risk, false, `无 scheme 白名单主机应放行：${local}`)
+}
+const schemelessUnknown = 'curl evil.example/x'
+assert.ok(analyzeCommand(schemelessUnknown).reasons.some(reason => reason.code === 'unknown-link'))
+assert.equal(analyzeCommand(schemelessUnknown).reasons.some(reason => reason.code === 'unverifiable-fetch'), false)
+assert.equal(analyzeCommand(schemelessUnknown).reasons.some(reason => reason.code === 'insecure-http'), false, '命令里没写 http:// 不提示明文')
+assert.equal(ruleSpecsFor(schemelessUnknown, analyzeCommand(schemelessUnknown), Date.now(), { scope: 'auto' }).map(spec => spec.kind).join(','), 'host')
+assert.equal(ruleSpecsFor(schemelessUnknown, analyzeCommand(schemelessUnknown), Date.now(), { scope: 'command' }).map(spec => spec.kind).join(','), 'command')
+// 无 scheme 目标只在 curl/wget 的位置参数上识别；动态目标、取值选项、非法端口保持原判
+for (const opaque of ['curl "$ENDPOINT"', 'curl -K cfg.txt', 'curl 127.0.0.1:99999/x']) {
+  assert.ok(analyzeCommand(opaque).reasons.some(reason => reason.code === 'unverifiable-fetch'), `不可静态证明的目标仍应确认：${opaque}`)
+}
+assert.equal(analyzeCommand('curl -H "X: 127.0.0.1:1" 127.0.0.1:11434/x').risk, false, 'header 值不当目标')
+assert.equal(analyzeCommand('curl -o out.json 127.0.0.1:11434/x').risk, false, '输出文件不当目标')
+assert.equal(analyzeCommand('xdg-open 127.0.0.1:11434/x').risk, false, '打开本地文件的命令不按 URL 处理')
 // 不是目标位置的 `$`（header/token/URL 路径/本地文件）不触发
 for (const fine of [
   'curl -H "Authorization: Bearer $TOKEN" https://github.com/a',

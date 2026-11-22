@@ -5,6 +5,14 @@
 - 一句话：DSH 工具输出预算/落盘、去重、单轮调用/输出门禁、硬上限后 Web 自动填入「继续」、命令形态拦截、风险确认与窄规则自动放行（含按 cwd 的 `.tmp*` 清理与命令范围）、内置放行默认值外置、只读诊断、压缩归档与指标。
 - 位置：`dsh-context-guard/`；web profile 已按 link 加载并完成「始终允许」实机验证，superagent profile 待重启后核对。
 
+## 2026-11-23 修复无 scheme fetch 目标反复报风险
+
+- [x] `lib/risk.js`：`curl`/`wget` 位置参数识别无 scheme 目标（`127.0.0.1:11434/api/tags`、`example.com/x`、`[::1]:8080`），按 HTTP 取主机，端口可省略；`127.0.0.1`/`localhost` 等默认白名单主机不再报 `unverifiable-fetch`；
+- [x] 未放行的无 scheme 域名改判 `unknown-link`，自动范围可落 host 规则；动态目标（`$VAR`/反引号）仍按 `unverifiable-fetch`，`xdg-open` 等本地文件命令不受影响；无 scheme 目标不新增 `insecure-http` 提示；
+- [x] `client.js`：未勾「仅这条完整命令」但只落 command 规则时，提示「未识别出可放宽的主机或安全类别」；
+- [x] `test.mjs` 增回归断言，`README.md` / `README.en.md` 同步；计划见 `plans/PLAN-risk-schemeless-fetch.md`；
+- [ ] 待验证：重启 `dsh web` 后同一命令不再弹卡，审批流实机复核。
+
 ## 2026-11-23 新增步数与压缩门禁
 
 - [x] `lib/turn-budget.js` 新增步数/压缩计数：单回合 30 提醒 / 40 拒绝、会话累计 60 / 90、压缩 1 / 2，`ask` 每回合与每会话只触发一次；
