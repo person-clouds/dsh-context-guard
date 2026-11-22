@@ -2,7 +2,7 @@
   "name": "@fenghoer/dsh-context-guard",
   "version": "0.4.4",
   "type": "module",
-  "description": "DSH 插件：工具输出预算与落盘、重复结果去重、风险命令确认、只读诊断脚本、压缩归档与指标统计。",
+  "description": "DSH 插件：危险命令先确认、重复输出自动去重、单轮 bash 80/160 门禁、整文件 cat 与裸 curl 直接拦截；长输出完整落盘不丢证据。",
   "exports": {
     ".": "./index.js",
     "./client": "./client.js"

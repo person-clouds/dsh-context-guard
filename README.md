@@ -7,26 +7,36 @@ status: current
 
 # dsh-context-guard
 
-DSH Host-only 插件：把长工具输出挡在上下文之外，同时保留完整证据。
+给 DSH 加一道「上下文预算 + 风险兜底」：长输出不烧 token，危险命令先问一句。
 
-解决的问题：长会话里 `bash` 输出（`ls -la`、整文件 `cat`、`journalctl`、重复的 `curl` 轮询）会被反复计费；DSH 官方 persistent-bash 默认还会在 16,000 字符处截断，导致落盘也不完整。
+长会话里的 `ls -la`、整文件 `cat`、`journalctl`、重复 `curl` 轮询都会被反复计费；DSH 官方 persistent-bash 默认还会在 16,000 字符处截断，落盘也不完整。这个插件把这些输出挡在上下文外，完整证据留在磁盘上。
 
-本插件做七件事：
+## 先说最要紧的四件事
 
-1. **有界摘要**：输出超过预算时，完整文本写盘，上下文只保留 head/tail、命令类型和文件路径；
-2. **去重**：同一 session + tool + args 在 10 分钟内结果相同，只回上一次 call 的指针；结果变化只回行级 diff；
-3. **单轮调用门禁**：单轮 bash 达到 `maxCallsPerTurn`（默认 80，即第 80 次）返回一次 `ask` 审批提醒，会话列表显示黄色待处理点；达到 `hardMaxCallsPerTurn`（默认 160）时拒绝并由 Web 自动填入「继续」；
-4. **单轮累计输出门禁**：本轮累计进入上下文超过 40KB 后，后续超过 800 字符的结果只回摘要 + 落盘路径；
-5. **命令形态拦截**：整文件 `cat`、无排除的家目录递归搜索、裸 `curl` API 默认 `deny` 并提示有界替代；替代命令里的文件工具按当前工具面渲染（dsh-ops 为 `ops_inspect_local_file`/`ops_grep`/`ops_glob`，官方为 `read`/`grep`/`glob`），另含 `jq`；可切 `ask`；同时注入系统提示引导；
-6. **只读诊断**：`scripts/inspect.sh` 用固定模式替代零散命令；
-7. **风险确认 + 压缩归档 + 指标 + 清理**：风险命令执行前确认；压缩前后写 `STATUS.md`，统计节省量，按保留期和配额清磁盘。
+**1. 风险确认（最重要）**
+`rm -rf`、`git reset --hard`、`curl | bash`、访问白名单外的主机、关机停服、删库、提权……执行前都会先弹审批。点「允许一次」只放这一条；点「始终允许」会写一条窄规则，下次同类命令不再打扰。它是在 DSH 自己的权限策略之后再兜一层，不替代权限和沙箱；规则是正则启发式，可能误报或漏报，真正的高危操作还是建议人看一眼。
 
-## 本机配置落点
+**2. 去重**
+同一 session + 同一工具 + 同一参数，10 分钟内结果没变，只回「上次那个」的指针；结果变了只回行级 diff。命令每次都真实执行，缓存只省上下文，不影响结果。
 
-本机（2026-11-22 起）按「完全权限 + 需要时弹审批」运行，靠两处配置配合，改完都要重启 `dsh-web` 才生效：
+**3. 单轮调用门禁 80/160**
+一轮里 bash 调到第 80 次，弹一次审批提醒（会话列表有黄色小点）；第 160 次直接拒绝，Web 会往输入框自动填「继续」，你按回车才继续。防的是模型原地打转，不是卡正常干活。
 
-- **权限预设**：`~/.dsh/profiles/web/cordis.patch.yml` 里 `permission` 插件的 `full-access-ask` 预设（`sandbox: danger-full-access` + `approval: ask`），并用 `defaultPreset: full-access-ask` 设为新会话默认。原来的 `danger-full-access` 是 `approval: never`，会让本插件的风险确认在毫秒内被自动拒绝，报 `the user rejected tool "bash"`。
-- **风险白名单**：`~/.dsh/context-guard/risk-allow.json` 里 `kind: "host"` 的规则（与审批卡「始终允许」写入的是同一文件），增量叠加内置默认 `config/risk-allow-default.json`，例如 `192.168.31.244`、`100.84.98.28`、`zh-gem-r7.tailb6e152.ts.net`。host 规则只在「一条命令里所有 URL 主机都在白名单内」时才摘掉 `unknown-link` / `insecure-http`；`RiskRuleStore` 只在进程启动时读一次，手工编辑后不重启不加载。
+**4. 命令形态拦截**
+整文件 `cat`、没排除目录的家目录递归搜索、裸 `curl .../api/...` 默认直接拒绝，并给出有界替代（dsh-ops 下是 `ops_inspect_local_file`/`ops_grep`，官方工具面是 `read`/`grep`，另附 `jq`、`sed -n`）。复杂 shell 流程不想被拦，把 `commandLintMode` 改成 `ask` 即可。
+
+## 完整功能
+
+1. **有界摘要**：输出超过预算时完整文本写盘，上下文只保留 head/tail、命令类型和文件路径；
+2. **去重**：同 session + tool + args 结果相同只回指针，变化只回行级 diff；
+3. **单轮调用门禁**：默认第 80 次 `ask`、第 160 次 `deny`，硬上限由 Web 自动填「继续」；
+4. **单轮累计输出门禁**：本轮进入上下文超过 40KB 后，后续超过 800 字符的结果只回摘要 + 落盘路径；
+5. **命令形态拦截**：默认 `deny`，可切 `ask`；同时注入系统提示，引导模型优先用文件读取/搜索工具和 `jq`；
+6. **风险确认**：危险命令先 `ask`，支持「允许一次 / 始终允许」窄规则（含原因记录）；
+7. **只读诊断**：`scripts/inspect.sh` 用固定模式替代零散命令，只读、有界；
+8. **压缩归档 + 指标 + 清理**：压缩前后写 `STATUS.md`，统计节省量，按保留期和配额清磁盘；
+9. **文档提交门禁**：`git commit` 前按中央策略跑 `scripts/check.sh`，坏文档直接拒绝；
+10. **压缩阈值自检**：`scripts/apply-compaction.sh` 检查并重放四个内置 preset 的压缩阈值。
 
 ## 安装
 
@@ -44,18 +54,18 @@ dsh plugin --profile web add @fenghoer/dsh-context-guard
 dsh plugin --profile web add link:/home/zh/www/dsh-context-guard
 ```
 
-然后执行宿主机迁移脚本（会先检查包已安装、备份 profile）：
+然后跑宿主机迁移脚本（会先检查包已安装、备份 profile）：
 
 ```bash
 dsh-context-guard/scripts/apply-profile.sh
 ```
 
-脚本做三件事：
+脚本做四件事：
 
-- 把旧的 `compaction-archive` 插入项改成 `context-guard`，并修正为 scoped 包名 `@fenghoer/dsh-context-guard`；如果对应 profile 的 `node_modules/@fenghoer/dsh-context-guard` 不存在，会提示先执行 `dsh plugin --profile <p> add link:...` 并以非零退出；
-- 删除会报 `patch: entry "persistent-bash" not found` 的顶层旧块，改为覆盖 `minimal` preset 的完整 `config.plugins`，并把其中 `persistent-bash` 的 `maxOutputChars` 对齐为 `65536`；DSH 升级后需重跑脚本；
+- 把旧的 `compaction-archive` 插入项改成 `context-guard`，并修正为 scoped 包名；profile 里缺包时提示先 `dsh plugin --profile <p> add link:...` 并以非零退出；
+- 删掉会报 `patch: entry "persistent-bash" not found` 的顶层旧块，改为覆盖 `minimal` preset 的完整 `config.plugins`，并把 `maxOutputChars` 对齐为 `65536`（DSH 升级后需重跑）；
 - 把顶层官方 `tool-result-pruner` 对齐为 `6000/3000/1500`；
-- 若 `node_modules/dsh-superagent` 是指向不存在路径的 link，会提示用 `dsh plugin --profile <p> add link:/home/zh/www/dsh-superagent` 修复。
+- 若 `node_modules/dsh-superagent` 是失效 link，提示用 `dsh plugin --profile <p> add link:/home/zh/www/dsh-superagent` 修复。
 
 验证：
 
@@ -63,19 +73,12 @@ dsh-context-guard/scripts/apply-profile.sh
 dsh --profile web --dump-config | grep -E "context-guard|maxOutputChars|tool-result-pruner"
 ```
 
-## 压缩阈值自检
+## 本机配置落点
 
-`~/.dsh/cordis.patch.yml` 覆盖了四个内置 preset 的 `compaction-basic` 阈值（`0.08/0.02/65536`）。
-这份拷贝是整段抄安装包的，DSH 升级后可能过期，用脚本自检/重放：
+本机（2026-11-22 起）按「完全权限 + 需要时弹审批」运行，靠两处配置配合，改完都要重启 `dsh-web`：
 
-```bash
-bash dsh-context-guard/scripts/apply-compaction.sh check     # 只读自检，全部 PASS 退出 0
-bash dsh-context-guard/scripts/apply-compaction.sh dry-run   # 看会改哪些 preset
-bash dsh-context-guard/scripts/apply-compaction.sh apply     # 备份后原位重写，打印回滚命令
-```
-
-`apply` 由用户在自己的终端执行（AI 沙箱对 `~/.dsh` 只读），插件不会自动调用。
-细节与升级后处理见 [`docs/context-compaction.md`](docs/context-compaction.md) 5.5 节。
+- **权限预设**：`~/.dsh/profiles/web/cordis.patch.yml` 里 `permission` 插件的 `full-access-ask` 预设（`sandbox: danger-full-access` + `approval: ask`），并用 `defaultPreset: full-access-ask` 设为新会话默认。原来的 `danger-full-access` 是 `approval: never`，会让风险确认在毫秒内被自动拒绝，报 `the user rejected tool "bash"`。
+- **风险白名单**：`~/.dsh/context-guard/risk-allow.json` 里 `kind: "host"` 规则（与审批卡「始终允许」同一文件），增量叠加内置默认 `config/risk-allow-default.json`，例如 `192.168.31.244`、`100.84.98.28`、`zh-gem-r7.tailb6e152.ts.net`。host 规则只在一条命令里所有 URL 主机都在白名单内时才摘掉 `unknown-link`/`insecure-http`；`RiskRuleStore` 只在进程启动时读一次，手工编辑后需重启。
 
 ## 输出预算
 
@@ -92,27 +95,20 @@ bash dsh-context-guard/scripts/apply-compaction.sh apply     # 备份后原位�
 | 错误结果 | 非零退出 | 至少 2500 |
 | 显式声明 | 首行 `# dsh-budget=8000` | 最高 6000 |
 
-无界命令（`cat`、没有 `--since`/`-n` 的 `journalctl`、`find /`、`du /`）压到 1500，并提示改用有界命令。
+无界命令（`cat`、没有 `--since`/`-n` 的 `journalctl`、`find /`、`du /`）压到 1500，并提示改用有界命令。写盘失败时回退原始结果，不丢证据。
 
 ## 单轮门禁与命令提示
 
-- 调用门禁：同一轮 bash 每 80 次返回一次 `ask` 提醒（默认第 80 次），会话列表显示黄色 pending 点，审批浮窗可点继续或取消；第 160 次起 `deny`。监听 `session/event` 的 `turn/start` 清零；缺少该事件时退化为按 session 计数并记 warning。门禁文案同时显示“本轮 bash 调用次数”和当前 `session step`，两者不是同一口径。
-- 累计输出门禁：本轮实际进入上下文的字符数超过 `maxTurnOutputChars=40000` 后，后续超过 `exhaustedOutputChars=800` 的结果完整落盘，上下文只留 800 字符以内摘要 + 路径。
-- 命令拦截：默认 `commandLintMode: deny`。整文件 `cat` 提示改用当前文件工具按段读（dsh-ops 的 `ops_inspect_local_file({ path, offset, limit })`，或官方 `read`）或 `sed -n '1,120p'`；无排除递归搜索提示改用 `ops_grep`/`grep` 或加 `--glob '!**/node_modules/**'`；裸 `curl .../api/...` 提示改用 `| jq '{field1,field2}'` 或 `-o /tmp/out.json` 后再查询。
-- DSH 不支持在 `tools/pre-execute` 中改写工具参数，所以插件不会自动把 `cat` 替换成文件读取工具；它只拒绝当前调用，并在模型可见的 `reason` 中给出替代命令，由模型重新发起有界调用。
-- 复杂 shell 流程可设 `commandLintMode: ask` 降级为确认；`commandGuidanceEnabled: true` 会同时注册系统提示，引导模型优先使用文件读取/搜索工具（`ops_*` 或官方 `read`/`grep`/`glob`，按实际工具面渲染）与 `jq`。
+- **调用门禁**：同一轮 bash 每 80 次返回一次 `ask`（第 80 次），第 160 次起 `deny`；拒绝结果带标记 `context-guard:hard-limit-draft`，Web 在输入框为空时自动写入「继续」（不自动发送，按 Enter 才继续，同 session 最多 3 次、同 turn 最多 1 次，打开会话时对 30 分钟内事件补写；Desktop/TUI 静默降级）。`turn/start` 清零；缺少该事件时退化为按 session 计数并记 warning。文案同时显示「本轮 bash 调用次数」和当前 `session step`，两者口径不同。
+- **累计输出门禁**：本轮实际进入上下文超过 `maxTurnOutputChars=40000` 后，后续超过 `exhaustedOutputChars=800` 的结果完整落盘，上下文只留 ≤800 字符摘要 + 路径。
+- **命令拦截**：默认 `commandLintMode: deny`。整文件 `cat` 提示改用当前文件工具按段读（`ops_inspect_local_file({ path, offset, limit })` 或官方 `read`）或 `sed -n '1,120p'`；无排除递归搜索提示改用 `ops_grep`/`grep` 或加 `--glob '!**/node_modules/**'`；裸 `curl .../api/...` 提示改用 `| jq '{field1,field2}'` 或 `-o /tmp/out.json` 后再查询。
+- DSH 不支持在 `tools/pre-execute` 中改写工具参数，所以插件不会自动把 `cat` 换成文件读取工具；它只拒绝当前调用，并在模型可见的 `reason` 里给出替代命令，由模型重新发起有界调用。
+- 复杂 shell 流程可设 `commandLintMode: ask` 降级为确认；`commandGuidanceEnabled: true` 会同时注册系统提示，引导模型优先使用文件读取/搜索工具与 `jq`。
 - 命令 lint 为 `ask` 时与风险规则合并成一个 `ask`，不会一次调用弹两次；lint 为 `deny` 或已有 `deny`/`cancel` 时直接拒绝。
 
-写盘失败时回退原始结果，不丢证据。
-
-## 每 80 次提醒与硬上限自动填入「继续」
-
-单轮 bash 每达到 `maxCallsPerTurn`（默认 80）时返回一次 `ask` 审批提醒；该提醒会进入 DSH 的待处理交互，会话列表对应会话名前面会显示黄色小点。打开会话后可在审批浮窗点“允许一次”继续，或取消本次调用。达到 `hardMaxCallsPerTurn`（默认 160）时，本轮返回带机器标记 `context-guard:hard-limit-draft` 的拒绝结果。Web 客户端检测到该标记且输入框为空时，自动写入 `继续`；不会自动发送，按 Enter 才继续。同一 session 最多自动写入 3 次，同一 turn 最多 1 次。Web 只在会话打开时提供输入框；打开会话时若最近 30 分钟内已有该事件、输入框为空，也会补写，因此事后打开不会错过。更新插件后需重启 DSH Web 并刷新页面。Desktop/TUI 不加载 Web 客户端，静默降级为原始拒绝文案。
 ## 风险命令警示
 
-`tools/pre-execute` 在 DSH 自身权限策略通过后再做一层保底检查。命中规则时返回 `ask`，由 DSH 审批端弹出确认；用户不确认则命令不执行。它不修改命令、不做沙箱，也不替代 DSH 的权限/审批策略。默认检查 `bash` / `persistent-bash` / `terminal-bash` 与 `web_fetch`。
-
-默认覆盖：
+`tools/pre-execute` 在 DSH 自身权限策略通过后再做一层保底检查。命中规则时返回 `ask`，由 DSH 审批端弹确认；不确认就不执行。它不修改命令、不做沙箱，也不替代 DSH 权限/审批策略。默认检查 `bash` / `persistent-bash` / `terminal-bash` 与 `web_fetch`。
 
 | 类别 | 例子 |
 |---|---|
@@ -124,25 +120,35 @@ bash dsh-context-guard/scripts/apply-compaction.sh apply     # 备份后原位�
 | 数据库 | `DROP DATABASE/TABLE`、`TRUNCATE TABLE`、无 `WHERE` 的 `DELETE FROM` |
 | 提权/清历史 | `sudo`、`doas`、`su -`、`history -c` |
 
-`rm` 目标全部位于 `/tmp`、`/var/tmp`、`$TMPDIR` / `${TMPDIR}` 或 `~/opt`（含实际路径 `/home/<user>/opt`）下，或全部位于测试目录（`test`、`tests`、`__tests__`、`test-*`、`*-test`、`*.test`、`*.spec`）时跳过 `destructive-rm`；白名单只放行逐个列出的具体文件/目录，`/tmp`、`~/opt` 本身与通配（如 `rm -rf /tmp/*`、`rm -rf ~/opt/*`）仍拦截；含 `..`/`*`/`?`/`[`，或使用 `sudo`、`xargs`、命令替换/反引号时不放行。`repo-delete`、`find-delete` 等规则不受影响。`sudo -n true`（及 `sudo -n -v`）这类无副作用探测，以及 `sudo -n` 加只读检查命令（如 `ls`、`stat`、`cat`、`grep`、`systemctl status` 等）不触发 `privilege-escalation`，其他 `sudo` 命令仍会提示；`touch <write-test 文件> && rm <同一文件>`、`f=$(mktemp /tmp/...) && rm -f "$f"` 这类自清理写权限探测也不触发 `destructive-rm`。上述临时根、test 目录、`~/opt`、产物目录、写探测与 `sudo`/`systemctl` 只读清单均来自 [`config/risk-allow-default.json`](config/risk-allow-default.json) 的 `rm`/`probes`/`commands` 分组。
+放行边界：
 
-默认链接白名单来自同一份 [`config/risk-allow-default.json`](config/risk-allow-default.json)，按 `local`、`codeHosting`、`api`、`docs`、`techMedia` 分组，共 28 个主机；`riskAllowHosts` 显式设置时仍覆盖内置，用户「始终允许」保存的 host 规则与内置取并集。个人/内部域名（如 Tailscale 主机）不进内置，只保留在 `${DSH_HOME:-~/.dsh}/context-guard/risk-allow.json`。分组只影响文档与复核，运行时不区分来源；审阅时直接改该 JSON，把某个主机从 `hosts.*` 移到用户 `risk-allow.json` 即可。配置缺失或字段非法时回退最小安全默认（仅 `localhost`、`127.0.0.1`、`[::1]`，其余放行能力关闭）并告警，方向只会更严格。规则是正则启发式，可能误报或漏报，高风险生产操作仍应人工复核。
+- `rm` 目标全部位于 `/tmp`、`/var/tmp`、`$TMPDIR`/`${TMPDIR}`、`~/opt`（含 `/home/<user>/opt`），或全部位于测试目录（`test`、`tests`、`__tests__`、`test-*`、`*-test`、`*.test`、`*.spec`）时跳过 `destructive-rm`；只放行逐个列出的具体文件/目录，根目录本身与通配（`/tmp/*`、`~/opt/*`）仍拦截，含 `..`/`*`/`?`/`[`、`sudo`、`xargs`、命令替换/反引号也不放行。
+- `sudo -n true`、`sudo -n -v` 及 `sudo -n` + 只读检查命令（`ls`、`stat`、`cat`、`grep`、`systemctl status` 等）不触发 `privilege-escalation`；`touch <探测文件> && rm <同一文件>`、`f=$(mktemp /tmp/...) && rm -f "$f"` 这类自清理写探测不触发 `destructive-rm`。
+- 以上临时根、测试目录、`~/opt`、产物目录、写探测和 `sudo`/`systemctl` 只读清单都来自 [`config/risk-allow-default.json`](config/risk-allow-default.json)，改 JSON 即可调整。
 
-风险审批卡在「允许一次」之外提供「始终允许」：Host 会按审批 reason 里的短期 token 取回原始命令并重新解析，只在 `${DSH_HOME:-~/.dsh}/context-guard/risk-allow.json` 保存窄规则。点击「始终允许」会先要求填写放行原因（必填、最多 200 字）：原因作为规则标记 `reason` 写入同一 JSON，仅供复核展示、不参与匹配；同一规则再次放行时覆盖为最新原因。原因是明文落盘，请勿填写密码/Token 等敏感内容。构建产物清理会解析成「项目前缀 + 产物目录」类规则：确认 `rm -rf ./node_modules` 后，同一项目下的 `rm -rf ./dist`、`rm -rf packages/a/build` 等自动放行；`./src`、`..`、`sudo`/`xargs`/命令替换仍会询问；`rm -rf ./node_modules/*` 这类产物目录内的尾部通配和 `find ./node_modules ... -delete` 也按同一类规则处理。若风险仅来自未知链接，则只保存该主机。无法证明为安全类时退化为完全相同的规范化命令哈希。其它命令形态拦截和 DSH 权限策略仍照常生效，规则不会按 `destructive-rm` 等代码做全量通配。可用 `riskAutoAllowEnabled: false` 关闭按钮与自动放行，或用 `riskRuleFile` 改规则文件位置；删除该 JSON 即可整体撤销。待放行项在内存保留 10 分钟；为避免插件重载丢失 token，Host 会把它短期写入同目录的 `risk-pending.json`（权限 0600、过期自动清理），并在 token 失效时按审批 `callId` 兜底取回。点击「始终允许」后若失败，页面右下角会显示错误码与 HTTP 状态（如 `approval-rule-expired（HTTP 410）`）并写入浏览器控制台；保存超过 2 秒会先提示「仍在保存」，完成后提示结果；15 秒未返回按超时处理。失败不会消耗审批，仍可点「允许一次」。
+链接白名单同样来自该文件，按 `local`、`codeHosting`、`api`、`docs`、`techMedia` 分组，共 28 个主机；分组只影响文档与复核，运行时不区分来源。`riskAllowHosts` 显式设置时覆盖内置，用户「始终允许」保存的 host 规则与内置取并集；个人/内部域名（如 Tailscale 主机）不进内置。配置缺失或字段非法时回退最小安全默认（仅 `localhost`、`127.0.0.1`、`[::1]`）并告警，方向只会更严格。
+
+「始终允许」在 Host 侧用审批 reason 里的短期 token 取回原始命令、重新解析后，把窄规则存进 `${DSH_HOME:-~/.dsh}/context-guard/risk-allow.json`：
+
+- 点击后先要求填写放行原因（必填、最多 200 字），原因作为规则标记 `reason` 写入同一 JSON，仅供复核、不参与匹配；明文落盘，别填密码/Token。
+- 构建产物清理按「项目前缀 + 产物目录」泛化：确认 `rm -rf ./node_modules` 后，同项目的 `rm -rf ./dist`、`rm -rf packages/a/build` 自动放行；`./src`、`..`、`sudo`/`xargs`/命令替换仍询问；产物目录内的尾部通配和 `find ... -delete` 按同类规则处理。
+- 风险仅来自未知链接时只保存该主机；无法证明安全类时退化为完全相同的规范化命令哈希。命令形态拦截和 DSH 权限策略仍照常生效。
+- 可用 `riskAutoAllowEnabled: false` 关闭按钮与自动放行，`riskRuleFile` 改规则文件位置，删除 JSON 即整体撤销。
+- 待放行项内存保留 10 分钟；为避免插件重载丢 token，会短期写入同目录 `risk-pending.json`（0600、过期自动清理），token 失效时按审批 `callId` 兜底。
+- 保存失败时页面右下角显示错误码与 HTTP 状态（如 `approval-rule-expired（HTTP 410）`）并写控制台；超过 2 秒先提示「仍在保存」，15 秒按超时处理。失败不消耗审批，仍可点「允许一次」。
 
 ## 去重与 diff
 
-- 缓存键：`session + tool + args`；
-- TTL：10 分钟，最近使用会续期；
+- 缓存键：`session + tool + args`；TTL 10 分钟，最近使用会续期；
 - 只处理 ≥800 字符的非错误结果，避免用指针替代 `ok` 反而更贵；
 - **每次都真实执行命令**，不做执行缓存（持久 shell 的 cwd/env 状态不可靠）；
 - 相同结果：`[context-guard:dedup]` + 上次 call 指针；
 - 变化结果：`[context-guard:diff]`，只显示前后缀之间的变化块；
-- 缓存是进程内内存，重启后失效；这是安全的有意选择。
+- 缓存是进程内内存，重启后失效；这是有意的安全选择。
 
 ## 文档提交门禁
 
-`tools/pre-execute` 识别 `git commit`（含 `git -C <dir> commit` 与 `cd <dir> && git commit`），解析目标仓；目标仓已登记时按工作区中央 `scripts/docs-policy.json` 调用 `scripts/check.sh --repo <repo>`。检查失败返回 `deny`，附失败项，不自动改文件。非提交命令、未登记仓库不触发。
+`tools/pre-execute` 识别 `git commit`（含 `git -C <dir> commit` 与 `cd <dir> && git commit`），解析目标仓；已登记仓库按中央 `scripts/docs-policy.json` 调用 `scripts/check.sh --repo <repo>`。失败返回 `deny` 并附失败项，不自动改文件；非提交命令、未登记仓库不触发。
 
 配置：`docGuardEnabled`（默认 `true`）、`docGuardWorkspaceRoot`（默认 `/home/zh/www`）、`docGuardTimeoutMs`（默认 `30000`）。修改后重启 DSH profile 生效。
 
@@ -161,7 +167,7 @@ ${DSH_HOME:-$HOME/.dsh}/context-guard/archive/<session-id>/STATUS.md
 
 JSONL 字段：`session`、`call`、`tool`、`cmdType`、`originalChars`、`emittedChars`、`savedChars`、`dedup`、`diffSummary`、`isError`、`archived`。
 
-token 节省按 `chars/4` 估算，并在 `STATUS.md` 明确标注 `estimateMethod` 等价说明；当前只统计，不展示 UI。
+token 节省按 `chars/4` 估算，`STATUS.md` 里标注 `estimateMethod`；当前只统计，不展示 UI。
 
 ## inspect.sh
 
@@ -177,21 +183,19 @@ dsh-context-guard/scripts/inspect.sh http http://127.0.0.1:3082/
 dsh-context-guard/scripts/inspect.sh report
 ```
 
-原则：不使用 sudo、不启停服务、每段输出有行数/字节上限。检测到 `linuxops` 时只调用 `sysinfo`、`network ports`、`service status/logs` 等只读子命令，不存在则回退 `systemctl`/`journalctl`/`ss`。
-
-本机私有扩展放 `~/.dsh/context-guard/inspect.local.sh`，不随插件发布。
+原则：不使用 sudo、不启停服务、每段输出有行数/字节上限。检测到 `linuxops` 时只调用 `sysinfo`、`network ports`、`service status/logs` 等只读子命令，否则回退 `systemctl`/`journalctl`/`ss`。本机私有扩展放 `~/.dsh/context-guard/inspect.local.sh`，不随插件发布。
 
 ## linuxops（可选）
 
-`inspect.sh` 不依赖 `linuxops`：未安装时会自动回退到 `systemctl`、`journalctl`、`ss`、`uname`、`free`、`df`。如果想统一输出格式，可以三选一。
+`inspect.sh` 不依赖 `linuxops`：未安装时自动回退到系统命令。想统一输出格式，三选一：
 
 | 方案 | 适合谁 | 命令 |
 |---|---|---|
-| A. 不安装 | 只想用系统自带命令 | 无需操作；`inspect.sh` 自动回退 |
-| B. 插件只读兼容层 | 没有上游二进制，想直接获得统一输出 | `dsh-context-guard/scripts/install-linuxops.sh` |
-| C. 安装自建/上游二进制 | 已按上游 README 构建或下载了可信的 `linuxops` | `dsh-context-guard/scripts/install-linuxops.sh --binary /path/to/linuxops` |
+| A. 不安装 | 只用系统自带命令 | 无需操作，自动回退 |
+| B. 插件只读兼容层 | 没有上游二进制，想要统一输出 | `dsh-context-guard/scripts/install-linuxops.sh` |
+| C. 安装自建/上游二进制 | 已构建或下载了可信 `linuxops` | `dsh-context-guard/scripts/install-linuxops.sh --binary /path/to/linuxops` |
 
-方案 B 安装的是本插件自带的只读兼容层，**不是上游 linuxops 项目**。它只实现 `inspect.sh` 用到的四个接口：
+方案 B 安装的是插件自带的只读兼容层，**不是上游 linuxops 项目**，只实现 `inspect.sh` 用到的四个接口：
 
 ```text
 linuxops sysinfo
@@ -200,35 +204,31 @@ linuxops service logs --name <unit> --lines <n>
 linuxops network ports
 ```
 
-安装、验证与卸载：
-
 ```bash
-# 安装到 ~/.local/bin/linuxops（不需要 sudo）
+# B：安装到 ~/.local/bin/linuxops（不需要 sudo）
 dsh-context-guard/scripts/install-linuxops.sh
+# C：构建好后交给安装脚本，插件不复制、不覆盖上游源码
+dsh-context-guard/scripts/install-linuxops.sh --binary ./linuxops --force
 
-# 不在 PATH 时按提示加入，或直接显式指定
-export PATH="$HOME/.local/bin:$PATH"
-linuxops --version
+# 不在 PATH 时显式指定，或覆盖重装 / 卸载
 LINUXOPS_BIN="$HOME/.local/bin/linuxops" dsh-context-guard/scripts/inspect.sh overview
-
-# 覆盖重装 / 卸载
 dsh-context-guard/scripts/install-linuxops.sh --force
 dsh-context-guard/scripts/install-linuxops.sh --uninstall
 ```
 
-方案 C 的构建步骤以你选择的 linuxops 上游 README 为准；构建完成后把二进制交给安装脚本，插件不复制、不覆盖上游源码：
+注意：`inspect.sh` 只调用上述只读子命令；兼容层和安装脚本都不使用 `sudo`、不写系统、不启停服务；兼容层不是安全边界，权限仍由运行用户决定。
+
+## 压缩阈值自检
+
+`~/.dsh/cordis.patch.yml` 覆盖了四个内置 preset 的 `compaction-basic` 阈值（`0.08/0.02/65536`）。这份拷贝整段抄自安装包，DSH 升级后可能过期，用脚本自检/重放：
 
 ```bash
-# 示例：先在你信任的源码目录构建，产物为 ./linuxops
-dsh-context-guard/scripts/install-linuxops.sh --binary ./linuxops --force
-LINUXOPS_BIN="$HOME/.local/bin/linuxops" dsh-context-guard/scripts/inspect.sh report
+bash dsh-context-guard/scripts/apply-compaction.sh check     # 只读自检，全部 PASS 退出 0
+bash dsh-context-guard/scripts/apply-compaction.sh dry-run   # 看会改哪些 preset
+bash dsh-context-guard/scripts/apply-compaction.sh apply     # 备份后原位重写，打印回滚命令
 ```
 
-注意：
-
-- `inspect.sh` 只调用上面的只读子命令；上游 linuxops 如果接口不同，请使用 `LINUXOPS_BIN` 指向兼容的二进制，或选择方案 A。
-- 兼容层和安装脚本都不使用 `sudo`、不写系统、不启停服务。
-- 兼容层不是安全边界；它只是把系统命令的输出格式统一，权限仍由运行用户决定。
+`apply` 由用户在自己的终端执行（AI 沙箱对 `~/.dsh` 只读），插件不会自动调用。细节与升级后处理见 [`docs/context-compaction.md`](docs/context-compaction.md) 5.5 节。
 
 ## 配置示例
 
@@ -270,7 +270,7 @@ LINUXOPS_BIN="$HOME/.local/bin/linuxops" dsh-context-guard/scripts/inspect.sh re
 cd dsh-context-guard && npm test
 ```
 
-测试覆盖：压缩归档、命令分类/预算、有界渲染、大输出落盘、去重、行级 diff、单轮调用与累计输出门禁、硬上限自动「继续」标记与 3 次预算、命令形态 deny/ask 与合并 `ask`、指标、过期清理、风险命令识别与窄放行规则、文档提交门禁（坏文档拒绝、修复后放行）、`inspect.sh` 语法与帮助、Web 客户端语法。
+覆盖：压缩归档、命令分类/预算、有界渲染、大输出落盘、去重、行级 diff、单轮调用与累计输出门禁、硬上限自动「继续」标记与 3 次预算、命令形态 deny/ask 与合并 `ask`、指标、过期清理、风险命令识别与窄放行规则、文档提交门禁、`inspect.sh` 语法与帮助、Web 客户端语法。
 
 ## 边界
 

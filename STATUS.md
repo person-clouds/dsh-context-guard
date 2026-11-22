@@ -40,6 +40,7 @@
 - [x] 修复「bash 全量报 `cannot get property "tools" without inject`」：`detectFileTools` 与 `registerCommandGuidance` 原先直接读 `ctx.tools`/`ctx.systemPrompt`，插件未声明 `inject` 时 cordis 代理在属性读取阶段即抛错，`tools/pre-execute` 的命令形态检查因此让所有 bash 调用失败（0.4.2 引入 `detectFileTools` 时回归）；改为优先 `ctx.get()`（无 inject 要求、取不到返回 `undefined`）并保留属性读取兜底且包在 `try` 中，同时修复命令提示段落一直未注册的问题；`test.mjs` 增加严格上下文（属性读取即抛）的单元与端到端回归用例。
 - [x] 修复替代命令提示指错工具：`tools/pre-execute` 里 `detectFileTools(ctx)` 没传 scope，取到的是全局视图，看不到按 agent 作用域注册的 `ops_*`，于是文案退化成官方 `read`/`grep`/`glob`（部分会话根本没有 `read`）；改为 `detectFileTools(ctx, exec?.agent)`，与系统提示段落拿到的 `scope` 保持一致；`test.mjs` 增加「全局视图只有 `read`、agent 视图有 `ops_*` 时 deny 文案必须是 `ops_inspect_local_file`」回归用例。
 - [x] 压缩阈值配置可自检/可重放：新增 `scripts/apply-compaction.sh`（`check` 默认只读自检、`apply` 备份后按安装包 preset 重生成覆盖块并原位替换、`dry-run` 只预告），校验四个内置 preset 的 `compaction-basic` 三字段（`thresholdRatio/retainRatio/headroomTokens`），块与安装包不一致时报 FAIL 提示 DSH 升级漂移；保留宿主已有的 `maxOutputChars`；`test.mjs` 新增 fixture 语法/全 PASS/幂等/缺字段 FAIL/dry-run 不写盘用例；文档见 `docs/context-compaction.md` 5.5。
+- [x] 文档瘦身（2026-11-22）：中英 README 改为「先说最要紧的四件事（风险确认 > 去重 > 单轮 80/160 > 命令形态拦截）+ 全量功能列表」，长段落改成短句/列表/表格，合并重复的硬上限说明、精简 linuxops 章节；`package.json` 描述改成风险优先的一句话卖点，`market/person-clouds__dsh-context-guard.yml` 中英描述同步；修正英文 README 残留旧阈值（21/40 次 → 80/160 次）。npm 线上描述与市场条目要等下一次发布/PR 才更新。
 
 ## 待办
 
@@ -53,6 +54,7 @@
 | 6 | 用真实长输出验证 `maxOutputChars`、单轮门禁与落盘完整性 | 需重启 DSH |
 | 7 | 「始终允许」真实故障取证 | A 阶段已上线错误码提示；B 已补待放行项落盘与 `callId` 兜底（未取得真实故障原文，按最可能的 token 失效路径实现）；如再遇失败，记录提示/控制台原文以确认是否还有其它分支 |
 | 8 | 验证并发布默认放行配置外置 | 代码与文档已改；本会话 shell 不可用，需在 `/home/zh/www/dsh-context-guard` 跑 `npm test`、`npm pack --dry-run`（确认含 `config/risk-allow-default.json`），再在 `/home/zh/www` 跑 `./scripts/check.sh --repo dsh-context-guard`，通过后按 `PUBLISHING.md` 发布 |
+| 9 | 新描述上线 | `package.json` 描述与 README 已改，但 npm 页面要等下一次 `npm publish`（如 0.4.5）才更新；awesome-dsh-plugin 市场条目描述需另提 PR 更新。 |
 
 ## 验证记录
 
@@ -105,3 +107,5 @@
 | 2026-11-22 | `npm test`（压缩阈值自检脚本） | ok；`apply-compaction.sh` 语法通过；fixture 空 patch 下 dry-run 不写盘、apply 后 `check` 两个 fixture preset 全 PASS、二次 apply 无变化且只一份备份、删 `thresholdRatio` 与改值 0.5 均 FAIL 并点名 preset、空 patch 报「未被覆盖」 |
 | 2026-11-22 | `bash scripts/apply-compaction.sh check`（真实 home patch） | PASS：`preset-standard/minimal/ptc/cordis` 四个内置 preset 全部通过（仅比较阈值与安装包结构，忽略注释与引号风格）；未对 `~/.dsh` 执行 apply |
 | 2026-11-22 | 实机验收（白名单 + 预设） | `dsh-web` 于 12:23:51 重启（规则文件 12:21 写入，34 条规则/30 条 host）；`curl http://192.168.31.244:8095/` 返回 200 且**未弹审批卡**，证明 host 规则由 `allowedBy: host` 摘掉 `unknown-link`/`insecure-http`；本会话切到 `ask` 后审批链路正常。离线回放 7 条历史被拒命令：4 条 curl-only 由有风险变 `none`，2 条含 `docker rm -f` 仍为 `container-delete`，1 条 `$p` 变量端口仍报 `unknown-link`（`new URL()` 解析不出主机名） |
+| 2026-11-22 | `npm test`（README/npm/market 描述更新） | ok；无代码改动，回归通过 |
+| 2026-11-22 | `./scripts/check.sh --repo dsh-context-guard` | PASS（7 篇文档，0 项警告） |

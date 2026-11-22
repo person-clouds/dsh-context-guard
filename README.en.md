@@ -7,26 +7,36 @@ status: current
 
 # dsh-context-guard
 
-A DSH Host-only plugin that keeps long tool output out of the context while preserving the full evidence.
+A context-budget and risk safety net for DSH: long output stays out of the context, risky commands ask first.
 
-Problem: in long sessions, `bash` output (`ls -la`, whole-file `cat`, `journalctl`, repeated `curl` polls) is billed again and again. DSH's persistent-bash also truncates at 16,000 characters by default, so even archived output is incomplete.
+In long sessions, `ls -la`, whole-file `cat`, `journalctl` and repeated `curl` polls are billed again and again, and DSH's persistent-bash truncates at 16,000 characters by default, so even archived output can be incomplete. This plugin keeps those outputs out of the context while preserving the full evidence on disk.
 
-The plugin provides seven safeguards:
+## The four things that matter most
 
-1. **Bounded summaries** — when output exceeds its budget, the full text is written to disk and the context receives only head/tail, command type and the archive path.
-2. **Deduplication** — identical results for the same session + tool + args within 10 minutes return a pointer to the previous call; changed results return a line-level diff.
-3. **Per-turn call gate** — the 80th bash call in a turn returns an `ask` reminder, shown as a yellow pending dot in the session list; the 160th and later calls are denied, and the Web client fills "继续" at that hard limit.
-4. **Per-turn output gate** — after more than 40 KB has entered the context in one turn, later results over 800 characters are reduced to a summary plus archive path.
-5. **Command-shape enforcement** — whole-file `cat`, unscoped recursive searches under the home directory, and bare `curl` API calls are denied by default with bounded alternatives; the file tool named in those alternatives follows the active toolset (dsh-ops `ops_inspect_local_file`/`ops_grep`/`ops_glob`, otherwise `read`/`grep`/`glob`), plus `jq`; `ask` mode is configurable; system-prompt guidance is injected too.
-6. **Read-only diagnostics** — `scripts/inspect.sh` replaces ad-hoc commands with fixed, bounded patterns.
-7. **Risk confirmation + compaction archive + metrics + cleanup** — confirms risky commands, writes `STATUS.md` around compaction, records savings, and prunes by retention period and quota.
+**1. Risk confirmation (most important)**
+`rm -rf`, `git reset --hard`, `curl | bash`, non-allowlisted hosts, shutdown/service stop, database drops, privilege escalation — all ask before running. "Allow once" covers that one command; "always allow" stores a narrow rule so similar commands stop asking. This is a safety net after DSH's own permission policy, not a replacement for permissions or sandboxing. Rules are regex heuristics and may over- or under-report; high-risk production work still deserves a human look.
 
-## Local setup on this machine
+**2. Deduplication**
+Same session + same tool + same args, unchanged result within 10 minutes: only a pointer to the previous call comes back. Changed result: only a line-level diff. Commands always really run; the cache only saves context.
 
-Since 2026-11-22 this host runs "full access, ask when needed", which relies on two pieces of configuration; both need a `dsh-web` restart to take effect:
+**3. Per-turn call gate 80/160**
+The 80th bash call in a turn returns one approval reminder (yellow dot in the session list). The 160th is denied, and the Web client fills "继续" for you — press Enter to continue. This stops runaway loops, not normal work.
 
-- **Permission preset** — in `~/.dsh/profiles/web/cordis.patch.yml`, the `permission` plugin's `full-access-ask` preset (`sandbox: danger-full-access` + `approval: ask`), selected as the default for new sessions via `defaultPreset: full-access-ask`. The stock `danger-full-access` preset uses `approval: never`, which auto-rejects this plugin's risk confirmations within milliseconds and reports `the user rejected tool "bash"`.
-- **Risk allowlist** — `kind: "host"` rules in `~/.dsh/context-guard/risk-allow.json` (the same file that approval cards write to on "always allow"), layered on top of the built-in defaults in `config/risk-allow-default.json`, e.g. `192.168.31.244`, `100.84.98.28`, `zh-gem-r7.tailb6e152.ts.net`. Host rules only strip `unknown-link` / `insecure-http` when every URL host in one command is allowlisted; `RiskRuleStore` reads the file only at process start, so manual edits do not apply without a restart.
+**4. Command-shape enforcement**
+Whole-file `cat`, unscoped recursive searches under the home directory, and bare `curl .../api/...` are denied by default with bounded alternatives (`ops_inspect_local_file`/`ops_grep` under dsh-ops, `read`/`grep` otherwise, plus `jq` and `sed -n`). For complex shell workflows, set `commandLintMode: ask`.
+
+## All features
+
+1. **Bounded summaries** — over-budget output is fully written to disk; the context keeps head/tail, command type and path.
+2. **Deduplication** — identical results return a pointer; changes return a line-level diff.
+3. **Per-turn call gate** — `ask` at call 80, `deny` at call 160, with Web auto-fill of "继续".
+4. **Per-turn output gate** — after 40 KB enters the context in one turn, later results over 800 characters become a summary plus path.
+5. **Command-shape enforcement** — `deny` by default, switchable to `ask`; system-prompt guidance is injected too.
+6. **Risk confirmation** — risky commands ask first; "allow once" / "always allow" narrow rules with a recorded reason.
+7. **Read-only diagnostics** — `scripts/inspect.sh` replaces ad-hoc commands with fixed, bounded patterns.
+8. **Compaction archive + metrics + cleanup** — writes `STATUS.md` around compaction, records savings, prunes by retention and quota.
+9. **Documentation commit guard** — runs `scripts/check.sh` before `git commit`; bad docs are denied.
+10. **Compaction threshold self-check** — `scripts/apply-compaction.sh` checks and replays the four built-in presets.
 
 ## Install
 
@@ -50,12 +60,12 @@ Then run the host migration script (it checks the package is installed and backs
 dsh-context-guard/scripts/apply-profile.sh
 ```
 
-The script:
+The script does four things:
 
-- replaces the old `compaction-archive` insert with `context-guard` and fixes the scoped package name `@fenghoer/dsh-context-guard`; if `node_modules/@fenghoer/dsh-context-guard` is missing in a profile, it prints the `dsh plugin --profile <p> add link:...` command to run and exits non-zero;
-- removes the top-level `persistent-bash` block that causes `patch: entry "persistent-bash" not found`, and instead overlays the complete `minimal` preset `config.plugins`, setting its `persistent-bash` `maxOutputChars` to `65536`; rerun after upgrading DSH;
+- replaces the old `compaction-archive` insert with `context-guard` and fixes the scoped package name; if a profile lacks the package it prints the `dsh plugin --profile <p> add link:...` command and exits non-zero;
+- removes the top-level `persistent-bash` block that causes `patch: entry "persistent-bash" not found` and instead overlays the complete `minimal` preset `config.plugins`, setting `maxOutputChars` to `65536` (rerun after upgrading DSH);
 - aligns the top-level official `tool-result-pruner` to `6000/3000/1500`;
-- if `node_modules/dsh-superagent` is a link to a missing path, prints the fix command `dsh plugin --profile <p> add link:/home/zh/www/dsh-superagent`.
+- if `node_modules/dsh-superagent` is a link to a missing path, prints the fix command.
 
 Verify:
 
@@ -63,20 +73,12 @@ Verify:
 dsh --profile web --dump-config | grep -E "context-guard|maxOutputChars|tool-result-pruner"
 ```
 
-## Compaction threshold self-check
+## Local setup on this machine
 
-`~/.dsh/cordis.patch.yml` overrides `compaction-basic` thresholds (`0.08/0.02/65536`) for the four
-built-in presets. Those overrides are full copies of the installed presets, so they go stale after a
-DSH upgrade. Check and replay them with:
+Since 2026-11-22 this host runs "full access, ask when needed", which relies on two pieces of configuration; both need a `dsh-web` restart:
 
-```bash
-bash dsh-context-guard/scripts/apply-compaction.sh check     # read-only, exits 0 when all PASS
-bash dsh-context-guard/scripts/apply-compaction.sh dry-run   # show which presets would change
-bash dsh-context-guard/scripts/apply-compaction.sh apply     # back up, rewrite in place, print rollback
-```
-
-`apply` is run by the user in their own terminal (the AI sandbox is read-only for `~/.dsh`); the plugin
-never calls it. See section 5.5 of [`docs/context-compaction.md`](docs/context-compaction.md) for details.
+- **Permission preset** — in `~/.dsh/profiles/web/cordis.patch.yml`, the `permission` plugin's `full-access-ask` preset (`sandbox: danger-full-access` + `approval: ask`), selected as the default via `defaultPreset: full-access-ask`. The stock `danger-full-access` preset uses `approval: never`, which auto-rejects risk confirmations within milliseconds and reports `the user rejected tool "bash"`.
+- **Risk allowlist** — `kind: "host"` rules in `~/.dsh/context-guard/risk-allow.json` (the file approval cards write to on "always allow"), layered on the built-in defaults in `config/risk-allow-default.json`, e.g. `192.168.31.244`, `100.84.98.28`, `zh-gem-r7.tailb6e152.ts.net`. Host rules only strip `unknown-link` / `insecure-http` when every URL host in one command is allowlisted; `RiskRuleStore` reads the file only at process start, so manual edits need a restart.
 
 ## Output budgets
 
@@ -97,21 +99,16 @@ Unbounded commands (`cat`, `journalctl` without `--since`/`-n`, `find /`, `du /`
 
 ## Per-turn gates and command hints
 
-- Call gate: the 21st bash call in a turn returns one `ask` (not repeated in that turn); the 40th and later calls return `deny`. `turn/start` resets counters; if that event is missing, the plugin falls back to per-session counting and logs a warning. Gate messages show both the bash-call count for the turn and the current `session step`, which are different counters.
-- Output gate: after actual emitted context exceeds `maxTurnOutputChars=40000` in a turn, later results over `exhaustedOutputChars=800` are fully archived while the context receives at most 800 characters plus the path.
-- Command enforcement: `commandLintMode: deny` by default. Whole-file `cat` points to the active file-read tool (`ops_inspect_local_file({ path, offset, limit })` with dsh-ops, otherwise `read`) or `sed -n '1,120p'`; unscoped recursive search points to `ops_grep`/`grep` or `--glob '!**/node_modules/**'`; bare `curl .../api/...` points to `| jq '{field1,field2}'` or `-o /tmp/out.json` followed by a query.
-- DSH does not allow `tools/pre-execute` to rewrite tool arguments, so the plugin cannot silently turn `cat` into a file-read tool; it denies the current call and puts the replacement in the model-visible `reason`, letting the model retry with a bounded call.
-- Complex shell workflows can set `commandLintMode: ask` to downgrade to confirmation; `commandGuidanceEnabled: true` also registers system-prompt guidance for the file tools actually published (`ops_*` or `read`/`grep`/`glob`) and `jq`.
-- In `ask` mode a command-lint match and a risk match are merged into one `ask`; a lint `deny` or an existing `deny`/`cancel` wins.
+- **Call gate**: the 80th bash call in a turn returns one `ask`; the 160th and later are denied. Denies carry the marker `context-guard:hard-limit-draft`; the Web client fills an **empty** composer with `继续` (never sends automatically — press Enter; at most 3 fills per session and 1 per turn, also restored when the event is within the last 30 minutes; Desktop/TUI silently falls back). `turn/start` resets counters; if that event is missing the plugin falls back to per-session counting and logs a warning. Messages show both the turn's bash-call count and the current `session step`, which are different counters.
+- **Output gate**: after actual emitted context exceeds `maxTurnOutputChars=40000` in a turn, later results over `exhaustedOutputChars=800` are fully archived while the context receives at most 800 characters plus the path.
+- **Command enforcement**: `commandLintMode: deny` by default. Whole-file `cat` points to the active file-read tool (`ops_inspect_local_file({ path, offset, limit })` or `read`) or `sed -n '1,120p'`; unscoped recursive search points to `ops_grep`/`grep` or `--glob '!**/node_modules/**'`; bare `curl .../api/...` points to `| jq '{field1,field2}'` or `-o /tmp/out.json` followed by a query.
+- DSH does not allow `tools/pre-execute` to rewrite tool arguments, so the plugin denies the current call and puts the replacement in the model-visible `reason`; the model retries with a bounded call.
+- Complex shell workflows can set `commandLintMode: ask` to downgrade to confirmation; `commandGuidanceEnabled: true` also registers system-prompt guidance for the active file tools and `jq`.
+- In `ask` mode a command-lint match and a risk match merge into one `ask`; a lint `deny` or an existing `deny`/`cancel` wins.
 
-## Reminders at 80 calls and auto-fill "continue" at the hard limit
-
-Every `maxCallsPerTurn` bash calls (default 80) the turn returns one `ask` approval reminder. The pending interaction shows a yellow dot next to the session name; opening the session shows the approval panel where you can allow once or cancel. At `hardMaxCallsPerTurn` (default 160) the turn returns a deny result carrying the machine marker `context-guard:hard-limit-draft`. The Web client fills an **empty** composer with `继续`; it never sends automatically — press Enter to continue. At most 3 auto-fills per session and 1 per turn. Web only exposes a composer while the session is open; opening a session also restores the fill when the event occurred within the last 30 minutes. Restart DSH Web and reload the page after updating the plugin. Desktop/TUI do not load the Web client and silently fall back to the original deny message.
 ## Risky-command warnings
 
 `tools/pre-execute` runs after DSH's own permission policy as a final safety net. On a match it returns `ask`, so DSH's approval UI asks the user; the command does not run without confirmation. It does not rewrite commands, sandbox execution, or replace DSH permissions. It checks `bash` / `persistent-bash` / `terminal-bash` and `web_fetch` by default.
-
-Default coverage:
 
 | Category | Examples |
 |---|---|
@@ -123,16 +120,26 @@ Default coverage:
 | Databases | `DROP DATABASE/TABLE`, `TRUNCATE TABLE`, `DELETE FROM` without `WHERE` |
 | Privilege/history | `sudo`, `doas`, `su -`, `history -c` |
 
-`rm` is exempt from `destructive-rm` only when every target is under `/tmp`, `/var/tmp`, `$TMPDIR`/`${TMPDIR}`, `~/opt` (including the real path `/home/<user>/opt`), or entirely inside test directories (`test`, `tests`, `__tests__`, `test-*`, `*-test`, `*.test`, `*.spec`). These roots, test-directory rules, `~/opt`, build-artifact directories, write probes, and the `sudo`/`systemctl` read-only lists all come from the same [`config/risk-allow-default.json`](config/risk-allow-default.json) shipped with the package. The allowlist only covers explicitly listed files/directories: the roots themselves and wildcards such as `rm -rf /tmp/*` or `rm -rf ~/opt/*` are still blocked. Targets containing `..`, `*`, `?`, `[`, plus `sudo`, `xargs`, command substitution and backticks are not exempt. `repo-delete`, `find-delete` and other rules are unchanged. Side-effect-free probes such as `sudo -n true` (and `sudo -n -v`), plus `sudo -n` with read-only inspection commands such as `ls`, `stat`, `cat`, `grep` and `systemctl status`, do not trigger `privilege-escalation`; other `sudo` commands still do. Self-cleaning write probes such as `touch <write-test file> && rm <same file>` or `f=$(mktemp /tmp/...) && rm -f "$f"` do not trigger `destructive-rm` either.
+Exemption boundaries:
 
-Default host allowlist: 28 hosts from the same [`config/risk-allow-default.json`](config/risk-allow-default.json), grouped as `local`, `codeHosting`, `api`, `docs` and `techMedia`. Groups only affect documentation and review, not runtime matching. An explicit `riskAllowHosts` still overrides the built-ins; hosts saved by “always allow” are always unioned with the base list. Personal/internal domains (such as Tailscale hosts) stay out of the built-ins and live only in `${DSH_HOME:-~/.dsh}/context-guard/risk-allow.json`. To review a host, edit the JSON and move it into the user rule file. If the config is missing or invalid, the plugin falls back to minimal safe defaults (only `localhost`, `127.0.0.1`, `[::1]`; other allowances off) and warns; the fallback is always stricter. Rules are regex heuristics and can both over- and under-report; high-risk production operations still need human review.
+- `rm` skips `destructive-rm` only when every target is under `/tmp`, `/var/tmp`, `$TMPDIR`/`${TMPDIR}`, `~/opt` (including `/home/<user>/opt`), or entirely inside test directories (`test`, `tests`, `__tests__`, `test-*`, `*-test`, `*.test`, `*.spec`). Only explicitly listed files/directories are exempt; the roots themselves and wildcards (`/tmp/*`, `~/opt/*`) are still blocked, as are targets containing `..`/`*`/`?`/`[`, `sudo`, `xargs`, command substitution or backticks.
+- `sudo -n true`, `sudo -n -v`, and `sudo -n` with read-only inspection commands (`ls`, `stat`, `cat`, `grep`, `systemctl status`, etc.) do not trigger `privilege-escalation`; self-cleaning write probes (`touch <probe> && rm <same file>`, `f=$(mktemp /tmp/...) && rm -f "$f"`) do not trigger `destructive-rm`.
+- These roots, test directories, `~/opt`, build-artifact directories, write probes and the `sudo`/`systemctl` read-only lists all come from [`config/risk-allow-default.json`](config/risk-allow-default.json).
 
-Next to “allow once”, the risk approval card offers “always allow”. The Host resolves a short-lived token from the approval reason back to the original command, re-parses it, and stores a narrow rule in `${DSH_HOME:-~/.dsh}/context-guard/risk-allow.json`. “Always allow” first asks for a reason (required, up to 200 characters); the reason is stored as the rule label `reason` in the same JSON, shown only for later review and never used for matching, and a later allow of the same rule replaces it with the newest reason. The reason is stored in plaintext, so do not enter passwords, tokens, or other secrets. Build-artifact cleanup is parsed into a “project prefix + artifact directory” class rule: after confirming `rm -rf ./node_modules`, the same project may run `rm -rf ./dist` or `rm -rf packages/a/build` without another ask; `./src`, `..`, `sudo`/`xargs`, and command substitution still ask; trailing wildcards inside an artifact directory (`rm -rf ./node_modules/*`) and `find ./node_modules ... -delete` follow the same class rule. When the only risk is an unknown link, only that host is stored. If no safe class can be proven, the rule falls back to the hash of the exact normalized command. Command-shape lint and DSH permissions still apply, and rules never wildcard a code such as `destructive-rm`. Set `riskAutoAllowEnabled: false` to disable the button and auto-allow, or `riskRuleFile` to move the rule file; delete the JSON to revoke all rules. Pending entries live in memory for 10 minutes; to survive a plugin reload the Host also writes them briefly to `risk-pending.json` next to the rule file (mode 0600, expired entries cleaned up), and falls back to the approval `callId` when the token is gone. If saving fails, the page shows the error code and HTTP status (for example `approval-rule-expired (HTTP 410)`) in a toast and in the browser console; a save taking more than 2 seconds reports progress first and its result when done, and 15 seconds without a response counts as a timeout. A failed save leaves the approval answerable, so “allow once” still works.
+The default host allowlist is also from that file: 28 hosts grouped as `local`, `codeHosting`, `api`, `docs`, `techMedia`. Groups only affect docs and review, not runtime matching. An explicit `riskAllowHosts` overrides the built-ins; hosts saved by "always allow" are unioned with them. Personal/internal domains (such as Tailscale hosts) stay out of the built-ins. If the config is missing or invalid, the plugin falls back to minimal safe defaults (only `localhost`, `127.0.0.1`, `[::1]`) and warns.
+
+"Always allow" resolves a short-lived token from the approval reason back to the original command, re-parses it, and stores a narrow rule in `${DSH_HOME:-~/.dsh}/context-guard/risk-allow.json`:
+
+- It first asks for a reason (required, up to 200 characters), stored as the rule label `reason`, shown only for review and never used for matching. The reason is plaintext — do not enter secrets.
+- Build-artifact cleanup becomes a "project prefix + artifact directory" class rule: after confirming `rm -rf ./node_modules`, the same project may run `rm -rf ./dist` or `rm -rf packages/a/build`; `./src`, `..`, `sudo`/`xargs` and command substitution still ask; trailing wildcards inside an artifact directory and `find ... -delete` follow the same class rule.
+- When the only risk is an unknown link, only that host is stored; if no safe class can be proven, the rule falls back to the exact normalized command hash. Command-shape lint and DSH permissions still apply.
+- Set `riskAutoAllowEnabled: false` to disable the button and auto-allow, `riskRuleFile` to move the file, or delete the JSON to revoke all rules.
+- Pending entries live in memory for 10 minutes and are also written briefly to `risk-pending.json` (0600, expired entries cleaned) to survive a plugin reload; when the token is gone the plugin falls back to the approval `callId`.
+- If saving fails, the page shows the error code and HTTP status (e.g. `approval-rule-expired (HTTP 410)`) in a toast and the console; a save over 2 seconds reports progress first, and 15 seconds counts as a timeout. A failed save leaves "allow once" available.
 
 ## Deduplication and diffs
 
-- Cache key: `session + tool + args`.
-- TTL: 10 minutes, refreshed on use.
+- Cache key: `session + tool + args`; TTL 10 minutes, refreshed on use.
 - Only non-error results of at least 800 characters are deduplicated; replacing `ok` with a pointer would be more expensive.
 - **The command always really runs** — execution is never cached, because persistent-shell cwd/env state is unreliable.
 - Identical result: `[context-guard:dedup]` plus the previous call pointer.
@@ -176,21 +183,19 @@ dsh-context-guard/scripts/inspect.sh http http://127.0.0.1:3082/
 dsh-context-guard/scripts/inspect.sh report
 ```
 
-Principles: no sudo, no service start/stop, and every section has line/byte limits. If `linuxops` exists, only read-only subcommands (`sysinfo`, `network ports`, `service status/logs`) are used; otherwise it falls back to `systemctl` / `journalctl` / `ss`.
-
-Machine-private extensions belong in `~/.dsh/context-guard/inspect.local.sh` and are not shipped with the plugin.
+Principles: no sudo, no service start/stop, and every section has line/byte limits. If `linuxops` exists, only read-only subcommands (`sysinfo`, `network ports`, `service status/logs`) are used; otherwise it falls back to `systemctl` / `journalctl` / `ss`. Machine-private extensions belong in `~/.dsh/context-guard/inspect.local.sh`.
 
 ## linuxops (optional)
 
-`inspect.sh` does not require `linuxops`; without it, the script falls back to `systemctl`, `journalctl`, `ss`, `uname`, `free`, `df`. To unify output format, choose one of three options.
+`inspect.sh` does not require `linuxops`; without it, the script falls back to system tools. To unify output format, choose one of three options:
 
 | Option | Who it is for | Command |
 |---|---|---|
-| A. Do not install | Only system tools needed | Nothing to do; `inspect.sh` falls back automatically |
-| B. Plugin read-only compatibility shim | No upstream binary, but unified output wanted | `dsh-context-guard/scripts/install-linuxops.sh` |
+| A. Do not install | Only system tools needed | Nothing to do; automatic fallback |
+| B. Plugin read-only shim | No upstream binary, unified output wanted | `dsh-context-guard/scripts/install-linuxops.sh` |
 | C. Install your own/upstream binary | Already built/downloaded a trusted `linuxops` | `dsh-context-guard/scripts/install-linuxops.sh --binary /path/to/linuxops` |
 
-Option B installs a bundled read-only compatibility shim, **not the upstream linuxops project**. It implements only the four interfaces used by `inspect.sh`:
+Option B installs a bundled read-only shim, **not the upstream linuxops project**. It implements only the four interfaces used by `inspect.sh`:
 
 ```text
 linuxops sysinfo
@@ -199,35 +204,31 @@ linuxops service logs --name <unit> --lines <n>
 linuxops network ports
 ```
 
-Install, verify and uninstall:
-
 ```bash
-# Install to ~/.local/bin/linuxops (no sudo)
+# B: install to ~/.local/bin/linuxops (no sudo)
 dsh-context-guard/scripts/install-linuxops.sh
+# C: hand a built binary to the installer; the plugin never copies or overwrites upstream source
+dsh-context-guard/scripts/install-linuxops.sh --binary ./linuxops --force
 
-# Add to PATH if needed, or pass LINUXOPS_BIN explicitly
-export PATH="$HOME/.local/bin:$PATH"
-linuxops --version
+# Pass LINUXOPS_BIN when it is not on PATH; force-reinstall / uninstall
 LINUXOPS_BIN="$HOME/.local/bin/linuxops" dsh-context-guard/scripts/inspect.sh overview
-
-# Force reinstall / uninstall
 dsh-context-guard/scripts/install-linuxops.sh --force
 dsh-context-guard/scripts/install-linuxops.sh --uninstall
 ```
 
-For option C, follow your chosen upstream README; then hand the binary to the installer. The plugin does not copy or overwrite upstream source:
+Notes: only the read-only subcommands above are called; neither the shim nor the installer uses sudo, writes to the system, or starts/stops services; the shim is not a security boundary.
+
+## Compaction threshold self-check
+
+`~/.dsh/cordis.patch.yml` overrides `compaction-basic` thresholds (`0.08/0.02/65536`) for the four built-in presets. Those overrides are full copies of the installed presets, so they go stale after a DSH upgrade. Check and replay them with:
 
 ```bash
-# Example: build in a trusted source directory first, producing ./linuxops
-dsh-context-guard/scripts/install-linuxops.sh --binary ./linuxops --force
-LINUXOPS_BIN="$HOME/.local/bin/linuxops" dsh-context-guard/scripts/inspect.sh report
+bash dsh-context-guard/scripts/apply-compaction.sh check     # read-only, exits 0 when all PASS
+bash dsh-context-guard/scripts/apply-compaction.sh dry-run   # show which presets would change
+bash dsh-context-guard/scripts/apply-compaction.sh apply     # back up, rewrite in place, print rollback
 ```
 
-Notes:
-
-- `inspect.sh` only calls the read-only subcommands above. If your upstream linuxops has a different interface, point `LINUXOPS_BIN` at a compatible binary or use option A.
-- Neither the shim nor the installer uses sudo, writes to the system, or starts/stops services.
-- The shim is not a security boundary; it only standardizes output formats, and permissions are still those of the running user.
+`apply` is run by the user in their own terminal (the AI sandbox is read-only for `~/.dsh`); the plugin never calls it. See section 5.5 of [`docs/context-compaction.md`](docs/context-compaction.md) for details.
 
 ## Configuration example
 
@@ -269,7 +270,7 @@ Notes:
 cd dsh-context-guard && npm test
 ```
 
-Coverage: compaction archive, command classification/budgets, bounded rendering, large-output archival, deduplication, line-level diffs, per-turn call and output gates, command-shape deny/ask with merged `ask`, metrics, expiry cleanup, risky-command detection and narrow allow rules, plus `inspect.sh` syntax and help.
+Coverage: compaction archive, command classification/budgets, bounded rendering, large-output archival, deduplication, line-level diffs, per-turn call and output gates, hard-limit auto-fill and its 3-use budget, command-shape deny/ask with merged `ask`, metrics, expiry cleanup, risky-command detection and narrow allow rules, documentation commit guard, `inspect.sh` syntax/help, and the Web client script.
 
 ## Boundaries
 
