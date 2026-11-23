@@ -1,9 +1,18 @@
 # STATUS — dsh-context-guard
 
-- 版本：`0.5.0`（本地已就绪，待发布；`npm publish` 需用户 2FA）
-- 更新时间：2026-11-23
+- 版本：`0.6.0`（本地已就绪，待发布；`npm publish` 需用户 2FA）。`0.5.0` 只有 npm，无 tag/Release；`0.6.0` 补齐 Release 与市场条目描述
+- 更新时间：2026-11-24
 - 一句话：DSH 工具输出预算/落盘、去重、单轮调用/输出门禁、硬上限后 Web 自动填入「继续」、命令形态拦截、风险确认与窄规则自动放行（含按 cwd 的 `.tmp*` 清理与命令范围）、内置放行默认值外置、只读诊断、压缩归档与指标。
 - 位置：`dsh-context-guard/`；web profile 已按 link 加载并完成「始终允许」实机验证，superagent profile 待重启后核对。
+
+## 2026-11-24 一键放行 + 风险总开关（0.6.0）
+
+- [x] `lib/turn-budget.js`：`allowFor/revokeAllow/allowState` 只挂单个 `sessionId`（空 id fail-closed，不回落 `unknown-session`）；放行 `steps` 后 `checkStep` 只计数不 deny/ask，`checkCall` 改为每满 `maxCallsPerTurn` 一条提醒、取消 160 硬拒；`summary().allow` 供面板显示。
+- [x] `index.js`：`CATASTROPHIC_PATTERNS`（`rm -rf /`、`dd of=/dev/*`、`mkfs`、`fdisk/parted/wipefs`、关机、`chmod -R 777 /`）在放行风险后仍询问；`root-recursive-delete` 改为原始词元解析（修正 `-rf` 组合短选项漏判）；`POST /api/context-guard-allow`（allow/revoke/query，缺 `sessionId` → 400，GET → 405，ttl 按 `maxHours` 截断）；`GUARD_ALLOW=steps|risk|all` 预置默认放行。
+- [x] `riskCheckEnabled` 正式化为总开关：`false` 时整块风险检查跳过（不识别、不弹卡、不生成 token），启动打一条 warn；lint/文档门禁/步数/核验态不受影响；已通过 `/api/context-guard-allow` 的 `oneClickAllow.riskCheckEnabled` 告知面板置灰风险按钮。
+- [x] `client.js`：`AllowPanel` 挂在 `conversation.input.dock`（order 30），提供本会话/小时数放行步数、一键放行风险、立即收回；无 hooks 环境自降级不打断同槽位组件。
+- [x] 测试：新增隔离/过期/收回/空 id/灾难级 10 条/路由 6 条断言；`npm test` ok，`./scripts/check.sh --repo dsh-context-guard` PASS。
+- [ ] 待办：npm 发布 0.6.0（用户 2FA）→ GitHub Release `v0.6.0`（资产名 `dsh-context-guard.tgz`，补 `v0.5.0` tag）→ 市场条目描述 PR → 真机验收（长任务无步数卡片、`rm -rf node_modules` 放行后不再弹、`rm -rf /` 仍弹）。
 
 ## 2026-11-23 压缩后余量不足与连环压缩（已实施，待用户 apply + 重启后实机复核）
 

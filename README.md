@@ -73,6 +73,12 @@ dsh --profile web --dump-config | grep -E "context-guard|maxOutputChars|tool-res
 
 放行边界（`/tmp`、测试目录、`~/opt`、只读 `sudo` 探测等）、链接扫描范围、「始终允许」落窄规则、白名单来源见 [`docs/operations.md`](docs/operations.md#风险命令警示)。
 
+### 关掉风险检查 / 一键放行
+
+- **总开关**：`riskCheckEnabled: false` 会让整块风险检查跳过——不识别、不弹卡、不生成放行 token。命令形态拦截（整文件 `cat`、裸 `curl`）、文档提交门禁、步数与调用门禁、核验态只读**都不受影响**。适合「命令由模型生成、误报多于真风险」的场景；关掉后 `rm -rf`、`dd`、`mkfs` 也不再询问，风险由模型自律。
+- **一键放行**（总开关保持 `true` 时可用）：输入框上方面板提供「本会话放行步数」「放行 N 小时」「一键放行风险」「立即收回」，只对当前会话生效、纯内存、DSH 重启即失效。放行风险后仍会询问**灾难级**命令：`rm -rf /`、`dd of=/dev/*`、`mkfs`、`fdisk/parted/wipefs`、关机/重启、`chmod -R 777 /`、根级目录通配删除。
+- 环境变量 `GUARD_ALLOW=steps|risk|all` 只给「第一次出现的会话」预置默认放行，便于临时解卡；面板仍可收回。
+
 ## 文档提交门禁
 
 `git commit` 前按中央 `scripts/docs-policy.json` 跑 `scripts/check.sh --repo <repo>`，失败返回 `deny` 并附失败项，不自动改文件；非提交命令、未登记仓库不触发。配置项与细节见[文档提交门禁](docs/operations.md#文档提交门禁)。

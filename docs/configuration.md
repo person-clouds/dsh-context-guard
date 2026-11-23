@@ -56,8 +56,9 @@ dsh --profile web --dump-config | grep -E "context-guard|maxOutputChars|tool-res
         commandGuidanceEnabled: true
         dedupeMinChars: 800
         dedupTtlMs: 600000
-        riskCheckEnabled: true
-        riskAutoAllowEnabled: true
+        riskCheckEnabled: true       # false = 整块风险检查跳过（不弹卡、不生成 token）；lint/文档门禁/步数不受影响
+        riskAutoAllowEnabled: true   # false = 关闭「始终允许」写规则按钮，风险仍询问
+        # oneClickAllow: {enabled: true, maxHours: 168, defaultHours: 8}  # 一键放行；GUARD_ALLOW=steps|risk|all 预置默认
         # riskRuleFile: /home/zh/.dsh/context-guard/risk-allow.json
         docGuardEnabled: true
         docGuardWorkspaceRoot: /home/zh/www
@@ -69,6 +70,22 @@ dsh --profile web --dump-config | grep -E "context-guard|maxOutputChars|tool-res
         maxTotalBytes: 524288000
         maxFilesPerSession: 300
 ```
+
+## 风险总开关与一键放行
+
+| 键 | 默认 | 说明 |
+|---|---|---|
+| `riskCheckEnabled` | `true` | `false` 时整块风险检查跳过（不识别、不弹卡、不生成 rule-token）。文档门禁、步数/调用门禁、`commandLint`、核验态只读不受影响 |
+| `riskAutoAllowEnabled` | `true` | 控制审批卡「始终允许」写窄规则；`false` 只去按钮，风险仍询问 |
+| `oneClickAllow.enabled` | `true` | 是否注册放行面板与 `POST /api/context-guard-allow` |
+| `oneClickAllow.maxHours` | `168` | 填小时数的上限，超过按上限截断 |
+| `oneClickAllow.defaultHours` | `8` | 输入框默认小时数 |
+| `GUARD_ALLOW` | 空 | 环境变量 `steps\|risk\|all`：仅给第一次出现的会话预置默认放行（面板可收回） |
+
+- 放行状态**只挂单个 `sessionId`**、纯内存，不落盘、不跨 DSH 重启；「本会话」放行在会话事件结束时清空，「N 小时」按 `expiresAt` 折算。
+- 放行后仍询问的**灾难级**命令：`rm -rf /`、`rm -rf /*`、`dd of=/dev/*`、`mkfs.*`、`fdisk/parted/wipefs /dev/*`、关机/重启、`chmod -R 777 /`、根级目录通配删除；`rm -rf /tmp/x`、`rm -rf ~/tmp/x`、`rm -rf node_modules` 不命中。
+- 放行步数后：不再有回合/会话步数硬线与 160 次调用硬拒，但仍按 `maxCallsPerTurn`（默认 80）每满一轮给一条提醒；计数照常累加，面板显示真实进度。
+- 优先级：**核验态（`V：` 标题）始终最高**，文档门禁与 `commandLint` 不受放行影响。
 
 ## 本机配置落点
 

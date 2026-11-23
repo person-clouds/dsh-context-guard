@@ -298,6 +298,146 @@ window.__ModuleLoader__.load({
       await approval.answer('allowed-once')
     }
 
+
+    const ALLOW_ENDPOINT = '/api/context-guard-allow'
+    const ALLOW_MIN_HOURS = 1
+    const ALLOW_MAX_HOURS = 168
+
+    /** 一键放行请求：只对当前 sessionId 生效；失败提错误码，不静默吞掉。 */
+    async function postAllow(sessionId, payload) {
+      if (!sessionId) throw new Error('缺少会话标识，无法放行')
+      const controller = typeof globalThis.AbortController === 'function' ? new globalThis.AbortController() : null
+      const timeout = controller && typeof globalThis.setTimeout === 'function'
+        ? globalThis.setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS)
+        : undefined
+      let response
+      try {
+        response = await fetch(ALLOW_ENDPOINT, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ ...payload, sessionId }),
+          ...(controller ? { signal: controller.signal } : {}),
+        })
+      } finally {
+        if (timeout !== undefined && typeof globalThis.clearTimeout === 'function') globalThis.clearTimeout(timeout)
+      }
+      const body = typeof response.json === 'function' ? await response.json().catch(() => null) : null
+      if (!response.ok || body?.ok !== true) throw new Error(body?.error || ('HTTP ' + response.status))
+      return body
+    }
+
+    function formatExpiry(expiresAt) {
+      if (!expiresAt) return '本会话有效'
+      const date = new Date(expiresAt)
+      const pad = (value) => String(value).padStart(2, '0')
+      return '至 ' + date.getFullYear() + '-' + pad(date.getMonth() + 1) + '-' + pad(date.getDate()) +
+        ' ' + pad(date.getHours()) + ':' + pad(date.getMinutes())
+    }
+
+    function allowLabel(allow) {
+      if (!allow || !allow.active) return '未放行'
+      const parts = []
+      if (allow.steps) parts.push('步数限制已放行')
+      if (allow.risk) parts.push('风险警告已放行')
+      return parts.join('、') + '（' + formatExpiry(allow.expiresAt) + '，仅本会话）'
+    }
+
+    /**
+     * 一键放行面板：挂在输入框上方 dock，只影响当前会话。
+     * 风险总开关 riskCheckEnabled=false 时，风险按钮置灰并标注「已关闭（配置）」。
+     */
+    function AllowPanel(props) {
+      const sessionId = props?.session?.id
+      // 宿主若未提供 hooks（测试桩/精简运行面），面板直接不渲染，不能打断同槽位的其它组件。
+      if (typeof React.useState !== 'function' || typeof React.useEffect !== 'function') return null
+      const [allow, setAllow] = React.useState(null)
+      const [riskCheckEnabled, setRiskCheckEnabled] = React.useState(true)
+      const [hours, setHours] = React.useState(8)
+      const [busy, setBusy] = React.useState(false)
+      React.useEffect(() => {
+        if (!sessionId) return undefined
+        let live = true
+        postAllow(sessionId, { action: 'query' })
+          .then(body => {
+            if (!live) return
+            setAllow(body.allow)
+            const config = body.oneClickAllow || {}
+            setRiskCheckEnabled(config.riskCheckEnabled !== false)
+            if (Number(config.defaultHours) > 0) setHours(Number(config.defaultHours))
+          })
+          .catch(() => {})
+        return () => { live = false }
+      }, [sessionId])
+      const run = async (payload, successText) => {
+        setBusy(true)
+        try {
+          const body = await postAllow(sessionId, payload)
+          setAllow(body.allow)
+          if (body.oneClickAllow) setRiskCheckEnabled(body.oneClickAllow.riskCheckEnabled !== false)
+          showNotice(successText || allowLabel(body.allow))
+        } catch (error) {
+          showNotice('一键放行失败：' + (error?.message || String(error)))
+        } finally {
+          setBusy(false)
+        }
+      }
+      if (!sessionId) return null
+      const buttonStyle = (disabled) => 'padding:5px 10px;border-radius:6px;border:1px solid ' +
+        (disabled ? '#374151' : '#2563eb') + ';background:' + (disabled ? 'transparent' : '#2563eb') +
+        ';color:' + (disabled ? '#6b7280' : '#fff') + ';font-size:12px;cursor:' + (disabled ? 'not-allowed' : 'pointer')
+      const hoursInput = React.createElement('input', {
+        type: 'number',
+        min: ALLOW_MIN_HOURS,
+        max: ALLOW_MAX_HOURS,
+        value: hours,
+        disabled: busy || (allow && allow.active),
+        'aria-label': '放行小时数',
+        onChange: event => {
+          const next = Number(event?.target?.value)
+          setHours(Number.isFinite(next) ? Math.min(ALLOW_MAX_HOURS, Math.max(ALLOW_MIN_HOURS, Math.floor(next))) : 8)
+        },
+        style: 'width:56px;padding:4px 6px;border-radius:6px;border:1px solid #374151;background:#0b1220;color:#f9fafb;font-size:12px',
+      })
+      return React.createElement('div', {
+        style: 'display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin:0 0 6px;padding:6px 10px;border:1px solid #374151;border-radius:8px;background:rgba(17,24,39,.85);color:#e5e7eb;font-size:12px',
+      },
+        React.createElement('span', { style: 'font-weight:600' }, 'context-guard 一键放行'),
+        allow && allow.active
+          ? React.createElement('span', { style: 'color:#a7f3d0' }, allowLabel(allow))
+          : React.createElement(React.Fragment, null,
+            React.createElement('button', {
+              type: 'button',
+              disabled: busy,
+              onClick: () => run({ action: 'allow', scope: 'steps' }, '步数限制已放行（本会话）'),
+              style: buttonStyle(busy),
+            }, '本会话放行步数'),
+            hoursInput,
+            React.createElement('button', {
+              type: 'button',
+              disabled: busy,
+              onClick: () => run({ action: 'allow', scope: 'steps', ttlMs: hours * 3600 * 1000 }, '步数限制已放行 ' + hours + ' 小时'),
+              style: buttonStyle(busy),
+            }, '放行步数'),
+            React.createElement('button', {
+              type: 'button',
+              disabled: busy || !riskCheckEnabled,
+              title: riskCheckEnabled ? '灾难级命令（rm -rf /、dd、mkfs 等）仍会询问' : '配置 riskCheckEnabled: false，风险检查已整体关闭',
+              onClick: () => run({ action: 'allow', scope: 'risk' }, '风险警告已放行（本会话），灾难级命令仍会询问'),
+              style: buttonStyle(busy || !riskCheckEnabled),
+            }, riskCheckEnabled ? '一键放行风险' : '风险检查已关闭')
+          ),
+        allow && allow.active
+          ? React.createElement('button', {
+            type: 'button',
+            disabled: busy,
+            onClick: () => run({ action: 'revoke' }, '已收回本会话的一键放行'),
+            style: 'padding:5px 10px;border-radius:6px;border:1px solid #374151;background:transparent;color:#fca5a5;font-size:12px;cursor:pointer',
+          }, '立即收回')
+          : null,
+        React.createElement('span', { style: 'color:#9ca3af' }, '仅本会话生效')
+      )
+    }
+
     function RiskApprovalSeat(props) {
       const approval = props.matched
       return props.renderFactorySlot('conversation.approval.card', {
@@ -325,6 +465,11 @@ window.__ModuleLoader__.load({
         id: 'context-guard-continue-draft',
         order: 100,
       }, ContinueDraftSeat))
+      ctx.slots.inject('conversation.input.dock', () => ctx.slots.register({
+        name: 'conversation.input.dock',
+        id: 'context-guard-allow',
+        order: 30,
+      }, AllowPanel))
       ctx.slots.inject('conversation.composer', () => ctx.slots.register({
         name: 'conversation.composer',
         priority: 0,

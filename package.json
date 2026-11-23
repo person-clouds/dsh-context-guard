@@ -3,9 +3,9 @@
   "publishConfig": {
     "registry": "https://registry.npmjs.org"
   },
-  "version": "0.5.0",
+  "version": "0.6.0",
   "type": "module",
-  "description": "DSH 插件：危险命令先确认、重复输出自动去重、单轮 bash 80/160 门禁、整文件 cat 与裸 curl 直接拦截；长输出完整落盘不丢证据。",
+  "description": "DSH 插件：危险命令先确认（可配置关闭）、一键放行风险与步数限制、重复输出自动去重、单轮 bash 80/160 门禁、整文件 cat 与裸 curl 直接拦截；长输出完整落盘不丢证据。",
   "exports": {
     ".": "./index.js",
     "./client": "./client.js"

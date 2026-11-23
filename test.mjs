@@ -4,7 +4,7 @@ import { access, chmod, copyFile, mkdir, mkdtemp, readFile, readdir, realpath, r
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import vm from 'node:vm'
-import { createRiskRuleHandler, name, apply, docGuardDecision, parseGitCommitCommand, detectFileTools, commandGuidanceText } from './index.js'
+import { createRiskRuleHandler, createAllowHandler, catastrophicReason, name, apply, docGuardDecision, parseGitCommitCommand, detectFileTools, commandGuidanceText } from './index.js'
 import { budgetFor, classifyCommand, renderBounded } from './lib/budget.js'
 import { lintCommand, lintDecision } from './lib/command-lint.js'
 import { TurnBudget } from './lib/turn-budget.js'
@@ -225,6 +225,115 @@ assert.equal(curlLint.hit, true)
 assert.equal(curlLint.reasons[0].code, 'bare-curl-api')
 assert.equal(lintCommand('curl -s http://127.0.0.1:3080/api/sessions | jq \'{id}\'').hit, false)
 assert.equal(lintCommand('curl -o /tmp/out.json http://127.0.0.1:3080/api/sessions').hit, false)
+
+/** 一键放行：只挂单个 sessionId；过期即回收；`checkCall` 有放行时「每 80 次提醒、不硬拒」。 */
+const allowBudget = new TurnBudget({ logger: { warn() {} } })
+allowBudget.startTurn('allow-a', 1)
+assert.deepEqual(allowBudget.allowFor('allow-a', { steps: true, risk: true }), { steps: true, risk: true, expiresAt: null, active: true })
+for (let i = 1; i <= 200; i++) {
+  allowBudget.noteStep('allow-a', i)
+  const step = allowBudget.checkStep('allow-a')
+  assert.equal(step.action, 'allow', `放行后第 ${i} 步不应 deny/ask`)
+  assert.equal(step.allowed, true)
+}
+assert.equal(allowBudget.summary('allow-a').steps, 200, '放行只影响门禁，计数照常')
+assert.equal(allowBudget.summary('allow-a').allow.steps, true)
+// 只放行 risk 不影响步数硬线：另开一个会话验 30 提醒 / 40 deny 原样
+allowBudget.allowFor('allow-risk-only', { risk: true })
+allowBudget.startTurn('allow-risk-only', 1)
+for (let i = 1; i <= 29; i++) {
+  allowBudget.noteStep('allow-risk-only', i)
+  assert.equal(allowBudget.checkStep('allow-risk-only').action, 'allow')
+}
+allowBudget.noteStep('allow-risk-only', 30)
+assert.equal(allowBudget.checkStep('allow-risk-only').action, 'ask', '放行 risk 不解除步数提醒')
+// 会话隔离：A 放行后连跑 200 步全 allow，B 仍在第 40 步（回合）、第 90 步（会话）被拒
+const isoBudget = new TurnBudget({ logger: { warn() {} } })
+isoBudget.startTurn('iso-a', 1)
+isoBudget.allowFor('iso-a', { steps: true })
+for (let i = 1; i <= 200; i++) {
+  isoBudget.noteStep('iso-a', i)
+  assert.equal(isoBudget.checkStep('iso-a').action, 'allow', `A 第 ${i} 步不应被拦`)
+}
+isoBudget.startTurn('iso-b', 1)
+for (let i = 1; i <= 39; i++) {
+  isoBudget.noteStep('iso-b', i)
+  assert.equal(isoBudget.checkStep('iso-b').action === 'deny', false, `B 第 ${i} 步不应 deny`)
+}
+isoBudget.noteStep('iso-b', 40)
+assert.equal(isoBudget.checkStep('iso-b').action, 'deny', 'B 第 40 步回合硬线原样')
+assert.equal(isoBudget.checkStep('iso-b').scope, 'turn')
+// B 跨回合：回合 30 提醒 / 40 硬拒，会话 60 提醒 / 90 硬拒，均不受 A 放行影响
+isoBudget.startTurn('iso-b', 2)
+const bActions = []
+let bTurn = 2
+for (let i = 41; i <= 90; i++) {
+  isoBudget.noteStep('iso-b', i)
+  const result = isoBudget.checkStep('iso-b')
+  bActions.push({ step: i, action: result.action, scope: result.scope })
+  if (result.action === 'deny') isoBudget.startTurn('iso-b', ++bTurn)
+}
+const bDenies = bActions.filter(item => item.action === 'deny').map(item => `${item.step}:${item.scope}`)
+assert.deepEqual(bDenies, ['80:turn', '90:session'], 'B 的回合/会话硬线与放行前完全一致')
+assert.deepEqual(bActions.filter(item => item.action === 'ask').map(item => `${item.step}:${item.scope}`), ['60:session'], 'B 会话第 60 步提醒照常')
+
+// checkCall：A 放行后不硬拒；B 第 160 次仍 deny
+for (let i = 1; i <= 240; i++) {
+  const check = isoBudget.checkCall('iso-a')
+  assert.notEqual(check.action, 'deny', `A 第 ${i} 次调用不应 deny`)
+  if (i % 80 === 0) assert.equal(check.action, 'ask', `A 第 ${i} 次给一条提醒`)
+  else assert.equal(check.action, 'allow')
+}
+isoBudget.startTurn('iso-b', 3)
+for (let i = 1; i <= 159; i++) assert.notEqual(isoBudget.checkCall('iso-b').action, 'deny')
+assert.equal(isoBudget.checkCall('iso-b').action, 'deny', '未放行的 B 第 160 次仍 deny')
+// 空 sessionId 一律 fail-closed，且不污染 unknown-session 的门禁
+assert.deepEqual(allowBudget.allowState(undefined), { steps: false, risk: false, expiresAt: null, active: false })
+assert.deepEqual(allowBudget.allowState(''), { steps: false, risk: false, expiresAt: null, active: false })
+assert.deepEqual(allowBudget.allowFor('', { steps: true }), { steps: false, risk: false, expiresAt: null, active: false, reason: 'session-required' })
+const shared = new TurnBudget({ logger: { warn() {} } })
+shared.allowFor('', { steps: true })
+shared.allowFor(undefined, { risk: true })
+assert.equal(shared.allowState('unknown-session').active, false)
+for (let i = 1; i <= 29; i++) {
+  shared.noteStep('unknown-session', i)
+  assert.equal(shared.checkStep('unknown-session').action, 'allow')
+}
+shared.noteStep('unknown-session', 30)
+assert.equal(shared.checkStep('unknown-session').action, 'ask', 'unknown-session 未被空 id 放行污染')
+// 时长到期即回收：把 allowExpiresAt 改到过去，30/40 硬线恢复
+const ttlBudget = new TurnBudget({ logger: { warn() {} } })
+ttlBudget.startTurn('ttl', 1)
+ttlBudget.allowFor('ttl', { steps: true, ttlMs: 3600e3 })
+assert.equal(ttlBudget.allowState('ttl').active, true)
+assert.ok(ttlBudget.allowState('ttl').expiresAt > Date.now())
+ttlBudget.stateFor('ttl').allowExpiresAt = Date.now() - 1
+assert.equal(ttlBudget.allowState('ttl').active, false, '到期后投影失效')
+for (let i = 1; i <= 39; i++) {
+  ttlBudget.noteStep('ttl', i)
+  assert.equal(ttlBudget.checkStep('ttl').action === 'deny', false)
+}
+ttlBudget.noteStep('ttl', 40)
+assert.equal(ttlBudget.checkStep('ttl').action, 'deny', '小时数到期后回合硬线恢复')
+// 收回后 deny 立即恢复
+const revokeBudget = new TurnBudget({ logger: { warn() {} } })
+revokeBudget.startTurn('revoke', 1)
+revokeBudget.allowFor('revoke', { steps: true })
+for (let i = 1; i <= 200; i++) { revokeBudget.noteStep('revoke', i); assert.equal(revokeBudget.checkStep('revoke').action, 'allow') }
+assert.equal(revokeBudget.revokeAllow('revoke').active, false)
+assert.equal(revokeBudget.checkStep('revoke').action, 'deny', '收回后下一次即 deny')
+// 灾难级判定：三条必须命中，两条不得命中
+assert.equal(catastrophicReason('rm -rf /'), 'root-recursive-delete')
+assert.ok(catastrophicReason('mkfs.ext4 /dev/sda'))
+assert.ok(catastrophicReason('dd if=/dev/zero of=/dev/sda'))
+assert.equal(catastrophicReason('rm -rf node_modules'), null)
+assert.equal(catastrophicReason('rm -rf ~/tmp/x'), null)
+assert.equal(catastrophicReason('rm -rf /tmp/x'), null, '以 / 开头的临时目录不算灾难级')
+assert.equal(catastrophicReason('rm -rf .tmp-pre'), null)
+assert.equal(catastrophicReason('rm -f a.txt'), null, '非递归删除不拦')
+assert.ok(catastrophicReason('sudo rm -R /*'))
+assert.ok(catastrophicReason('reboot'), '关机类仍询问')
+assert.ok(catastrophicReason('chmod -R 777 /'))
 
 // 插件钩子
 const dir = await mkdtemp(join(tmpdir(), 'dsh-context-guard-'))
@@ -858,6 +967,49 @@ const postRiskRuleWith = (handler, body) => new Promise(resolve => {
   handler(req, res)
 })
 const postRiskRule = (body) => postRiskRuleWith(handler, body)
+
+// 一键放行路由：缺 sessionId 一律 400（不回落 unknown-session）；allow/query/revoke 只对单个会话生效
+const allowRouteBudget = new TurnBudget({ logger: { warn() {} } })
+const allowRouteCfg = { oneClickAllow: { enabled: true, maxHours: 168, defaultHours: 8, envScope: null } }
+const allowRoute = createAllowHandler({ turnBudget: allowRouteBudget, cfg: allowRouteCfg, logger: { warn() {}, info() {} } })
+const postAllow = (body, method = 'POST') => new Promise(resolve => {
+  const req = {
+    method,
+    on(event, fn) {
+      if (event === 'data' && body !== undefined) fn(Buffer.from(JSON.stringify(body)))
+      if (event === 'end') fn()
+    },
+  }
+  const res = {
+    headersSent: false,
+    writableEnded: false,
+    writeHead(status) { this.status = status },
+    end(text) { this.writableEnded = true; resolve({ status: this.status, body: JSON.parse(text) }) },
+  }
+  allowRoute(req, res)
+})
+assert.equal((await postAllow({ action: 'allow', scope: 'steps' })).body.error, 'session-required')
+assert.equal((await postAllow({ action: 'allow', sessionId: '  ', scope: 'steps' })).status, 400, '空白 sessionId 同样 400')
+assert.equal((await postAllow({ action: 'allow', sessionId: 'route-a', scope: 'bogus' })).body.error, 'invalid-scope')
+assert.equal((await postAllow({ action: 'allow', sessionId: 'route-a', scope: 'steps' }, 'GET')).status, 405, 'GET 不允许触发放行')
+const allowedSteps = await postAllow({ action: 'allow', sessionId: 'route-a', scope: 'steps' })
+assert.equal(allowedSteps.status, 200)
+assert.equal(allowedSteps.body.allow.steps, true)
+assert.equal(allowedSteps.body.allow.expiresAt, null, '不带 ttlMs = 本会话级')
+assert.equal(allowRouteBudget.allowState('route-a').steps, true)
+assert.equal(allowRouteBudget.allowState('route-b').active, false, 'B 会话不受影响')
+assert.equal(allowRouteBudget.allowState('unknown-session').active, false)
+const allowedTtl = await postAllow({ action: 'allow', sessionId: 'route-a', scope: 'risk', ttlMs: 2 * 3600e3 })
+assert.ok(allowedTtl.body.allow.expiresAt > Date.now() + 3600e3, '填小时数记录过期时间')
+const queried = await postAllow({ action: 'query', sessionId: 'route-a' })
+assert.equal(queried.body.allow.steps, true)
+assert.equal(queried.body.allow.risk, true)
+assert.equal((await postAllow({ action: 'revoke', sessionId: 'route-a' })).body.allow.active, false)
+assert.equal(allowRouteBudget.allowState('route-a').active, false)
+// 超过 maxHours 的时长被截到上限
+const clamped = await postAllow({ action: 'allow', sessionId: 'route-c', scope: 'all', ttlMs: 9999 * 3600e3 })
+assert.ok(clamped.body.allow.expiresAt <= Date.now() + 168 * 3600e3 + 2000, '超过上限按 maxHours 截断')
+
 
 // 已放行主机不再重复进卡片/落库：有效白名单 = 配置或内置默认 + 已保存 host 规则
 const effectiveStoreFile = join(ruleDir, 'effective', 'risk-allow.json')
@@ -1512,7 +1664,16 @@ assert.equal(docAllowed, null)
   }
   const ctx = {
     sessions: { binding: () => ({ eventSource }) },
-    slots: { inject(name, fn) { registered[name] = fn() }, register(opts, Component) { return { ...opts, Component } } },
+    slots: {
+      inject(name, fn) {
+        // 同一槽位可注册多条（继续草稿 + 一键放行面板）：按 id 保留，后注册不覆盖前者。
+        const next = fn()
+        const key = next?.id || name
+        registered[key] = next
+        registered[name] ??= next
+      },
+      register(opts, Component) { return { ...opts, Component } },
+    },
   }
   const React = { useRef: (value) => ({ current: value }), useEffect: (fn) => { fn() } }
   const win = { __ModuleLoader__: { load(m) { plugin = m.factory((id) => id === 'react' ? React : undefined) } } }
@@ -1523,7 +1684,9 @@ assert.equal(docAllowed, null)
   }
   vm.runInNewContext(clientSource, { window: win, console, fetch, document: docSuccess, navigator: { language: 'zh-CN' } })
   plugin.apply(ctx)
-  registered['conversation.input.dock'].Component({
+  // 该 dock 槽位现在有两个注册（继续草稿 + 一键放行面板）：按 id 取继续草稿那条，面板在无 hooks 环境下自降级。
+  const continueSeat = Object.values(registered).find(entry => entry.id === 'context-guard-continue-draft')
+  continueSeat.Component({
     sessionId: 'session-test',
     useInput: () => '',
     inputActions: { setDraft: (text) => writes.push(text) },
@@ -2033,7 +2196,13 @@ const cwdCtx = {
   inject(names, register) {
     register({
       effect(fn) { fn() },
-      webServer: { register(def) { riskRouteHandler = def.handler } },
+      webServer: {
+        register(def) {
+          // 一键放行的 /api/context-guard-allow 也走同一个 register：只记风险规则这条。
+          if (def.path === '/api/context-guard-risk-rule') riskRouteHandler = def.handler
+          return def
+        },
+      },
     })
   },
 }

@@ -2,6 +2,6 @@ url: https://github.com/person-clouds/dsh-context-guard
 name: person-clouds/dsh-context-guard
 category: tools
 description:
-  en: 'DSH context and safety guard: confirm risky shell commands before they run, deduplicate repeated tool output, gate per-turn bash calls at 80/160, block whole-file cat and bare curl API calls, and archive full output to disk.'
-  zh: 'DSH 上下文与安全兜底：危险命令执行前确认、重复结果去重、单轮 bash 80/160 门禁、整文件 cat 与裸 curl 直接拦截，长输出完整落盘。'
+  en: 'DSH context and safety guard: confirm risky shell commands before they run (switchable off), one-click allow for step limits and risk warnings per session, deduplicate repeated tool output, gate per-turn bash calls at 80/160, block whole-file cat and bare curl API calls, and archive full output to disk.'
+  zh: 'DSH 上下文与安全兜底：危险命令执行前确认（可配置关闭）、一键放行风险警告与步数限制、重复结果去重、单轮 bash 80/160 门禁、整文件 cat 与裸 curl 直接拦截，长输出完整落盘。'
 tarball: https://github.com/person-clouds/dsh-context-guard/releases/latest/download/dsh-context-guard.tgz

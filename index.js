@@ -16,7 +16,7 @@ import { writeToolLog } from './lib/archive.js'
 import { DEFAULT_DEDUPE_MIN_CHARS, DedupCache, dedupKey, diffLines } from './lib/dedup.js'
 import { MetricsRecorder, metricOf } from './lib/metrics.js'
 import { cleanupOutputs } from './lib/cleanup.js'
-import { analyzeCommand, riskAskDecision } from './lib/risk.js'
+import { analyzeCommand, riskAskDecision, shellTokens, splitShellSegments } from './lib/risk.js'
 import { PendingRiskRules, RISK_RULE_ENDPOINT, RiskRuleStore, effectiveAllowHosts, filterRiskByRules, normalizeRuleReason, ruleSpecsFor } from './lib/risk-allow.js'
 import { lintCommand, lintDecision } from './lib/command-lint.js'
 import {
@@ -50,6 +50,46 @@ const DEFAULT_TOOL_NAMES = ['bash', 'persistent-bash', 'terminal-bash']
 const DEFAULT_DISPATCH_TOOLS = ['subagent', 'subagent_fork', 'workflow']
 /** 会话硬线后允许用户显式恢复的默认回复词；normalize 后做前缀匹配（如「继续吧」「继续执行」）。 */
 const DEFAULT_CONTINUE_KEYWORDS = ['继续', 'continue']
+/** 一键放行：范围、上限与默认小时数。 */
+const ALLOW_SCOPES = ['steps', 'risk', 'all']
+export const ALLOW_ENDPOINT = '/api/context-guard-allow'
+const DEFAULT_ALLOW_MAX_HOURS = 168
+const DEFAULT_ALLOW_DEFAULT_HOURS = 8
+
+/** 文件系统根目录（一键放行的灾难级判定只拦「真的是 `/`」，`/tmp/x` 一律不算）。 */
+const ROOT_PATHS = new Set(['/', '/*', '/.', '/./', '//', '/../'])
+
+/**
+ * 灾难级：即使已「一键放行风险警告」也仍然询问。只匹配会立刻不可恢复或打挂主机的形态，
+ * 不把全部 high 风险纳入（否则放行等于没放行）。
+ */
+export const CATASTROPHIC_PATTERNS = [
+  {
+    code: 'root-recursive-delete',
+    // rm 带 -r/-R 且任一目标解析后就是文件系统根（含通配写法），或直接删 /bin /etc /usr 等根级目录。
+    test: raw => {
+      for (const segment of splitShellSegments(raw)) {
+        // 只用原始词元：shellTokens 会把 -rf 这类组合短选项拆成 flags，目标路径信息随之丢失。
+        const words = segment.trim().split(/\s+/)
+        for (let index = 0; index < words.length; index++) {
+          const word = words[index].replace(/^(?:sudo|doas)$/, '').replace(/^(?:sudo|doas)$/, '')
+          if (!/^rm$/.test(word)) continue
+          const rest = words.slice(index + 1).filter(item => !item.startsWith('-'))
+          const flags = words.slice(index + 1).filter(item => item.startsWith('-')).join(' ')
+          if (!/(?:^|\s)-[A-Za-z]*[rR]/.test(flags) && !/--recursive\b/.test(flags)) continue
+          if (rest.some(item => isRootTarget(item))) return true
+        }
+      }
+      return false
+    },
+  },
+  { code: 'dd-write-device', test: raw => /\bdd\b[^\n]*\bof\s*=\s*\/dev\/(?:sd|hd|vd|nvme|mmcblk|disk)/.test(raw) },
+  { code: 'mkfs-device', test: raw => /\bmkfs(?:\.\w+)?\s+[^\n]*\/dev\//.test(raw) },
+  { code: 'fdisk-device', test: raw => /\b(?:fdisk|parted|wipefs)\b[^\n]*\/dev\//.test(raw) },
+  { code: 'power-off', test: raw => /(?:^|[;&|]\s*)(?:sudo\s+)?(?:shutdown|reboot|poweroff|halt)\b/.test(raw) },
+  { code: 'chmod-root-wildcard', test: raw => /\bchmod\s+(?:-[A-Za-z]+\s+)*(?:777|a\+rwx)\s+\/(?:\s|$|\*)/.test(raw) },
+  { code: 'root-wildcard-delete', test: raw => /\brm\s+[^\n]*\/(?:bin|boot|dev|etc|home|lib|lib64|opt|proc|root|sbin|srv|sys|usr|var)\b\s*(?:\*|\/?\s*(?:;|&|\||$))/.test(raw) },
+]
 
 function textOf(content) {
   return contentText(content)
@@ -76,6 +116,29 @@ function isContinueText(text, keywords) {
 
 function iso(ms) {
   return new Date(ms || Date.now()).toISOString()
+}
+
+/** 放行目标是否为文件系统根：去掉引号与结尾斜杠后落在 ROOT_PATHS 或 `/*` 一类写法。 */
+function isRootTarget(text) {
+  const raw = String(text || '').replace(/^['"`]+|['"`]+$/g, '')
+  if (!raw.startsWith('/')) return false
+  if (ROOT_PATHS.has(raw)) return true
+  const trimmed = raw.replace(/\/+$/, '')
+  return trimmed === '' || trimmed === '/.' || trimmed === '/..'
+}
+
+/** 一键放行的灾难级判定：返回命中的规则码，未命中返回 null。不能证明的按「未命中」放行原逻辑。 */
+export function catastrophicReason(command) {
+  const raw = String(command || '')
+  if (!raw) return null
+  for (const rule of CATASTROPHIC_PATTERNS) {
+    try {
+      if (rule.test(raw)) return rule.code
+    } catch {
+      // 单条规则解析异常不能影响放行主流程：交给后续风险检查处理。
+    }
+  }
+  return null
 }
 
 function fence(text) {
@@ -319,6 +382,25 @@ function guardConfig(config) {
       ? config.docGuardWorkspaceRoot
       : '/home/zh/www',
     docGuardTimeoutMs: Number(config.docGuardTimeoutMs) || 30000,
+    oneClickAllow: allowConfig(config.oneClickAllow),
+  }
+}
+
+/**
+ * 一键放行配置：环境变量 GUARD_ALLOW=steps|risk|all 覆盖配置（为解卡留确定性路径）。
+ * 环境变量只改「默认开关」，放行本身仍要求用户在面板上点一次。
+ */
+function allowConfig(raw) {
+  const env = String(process.env.GUARD_ALLOW || '').trim().toLowerCase()
+  const envScope = ALLOW_SCOPES.includes(env) ? env : null
+  const maxHoursRaw = Number(raw?.maxHours)
+  const defaultHoursRaw = Number(raw?.defaultHours)
+  const maxHours = maxHoursRaw > 0 ? maxHoursRaw : DEFAULT_ALLOW_MAX_HOURS
+  return {
+    enabled: raw?.enabled !== false,
+    envScope,
+    maxHours,
+    defaultHours: defaultHoursRaw > 0 ? Math.min(defaultHoursRaw, maxHours) : Math.min(DEFAULT_ALLOW_DEFAULT_HOURS, maxHours),
   }
 }
 
@@ -749,6 +831,93 @@ export function createRiskRuleHandler({ store, pending, riskAllowHosts, logger }
   }
 }
 
+const ALLOW_SCOPE_FIELDS = { steps: { steps: true }, risk: { risk: true }, all: { steps: true, risk: true } }
+
+/**
+ * 一键放行的 host 端点：只接受 POST（避免任何预览请求误触发），只挂单个 sessionId。
+ * 缺 sessionId 一律 400，绝不回落到 unknown-session 这个共享桶；不落盘、不带凭据。
+ */
+export function createAllowHandler({ turnBudget, cfg, logger }) {
+  const scopeOf = value => {
+    const scope = String(value || '').toLowerCase()
+    return ALLOW_SCOPES.includes(scope) ? scope : null
+  }
+  const reply = (res, sessionId) => {
+    sendJson(res, 200, { ok: true, sessionId, allow: turnBudget.allowState(sessionId), oneClickAllow: allowPublicConfig(cfg) })
+  }
+  return (req, res) => {
+    if (req.method !== 'POST') {
+      sendJson(res, 405, { ok: false, error: 'method-not-allowed' })
+      return
+    }
+    let body = ''
+    req.on('data', chunk => {
+      body += chunk.toString('utf8')
+      if (body.length > 8 * 1024) req.destroy()
+    })
+    req.on('end', () => {
+      let parsed = null
+      try {
+        parsed = JSON.parse(body || '{}')
+      } catch {
+        sendJson(res, 400, { ok: false, error: 'invalid-request' })
+        return
+      }
+      const sessionId = typeof parsed?.sessionId === 'string' ? parsed.sessionId.trim() : ''
+      if (!sessionId) {
+        sendJson(res, 400, { ok: false, error: 'session-required' })
+        return
+      }
+      try {
+        const action = String(parsed?.action || 'query')
+        if (action === 'allow') {
+          const scope = scopeOf(parsed?.scope)
+          if (!scope) {
+            sendJson(res, 400, { ok: false, error: 'invalid-scope' })
+            return
+          }
+          const hoursRaw = Number(parsed?.ttlMs)
+          let ttlMs = 0
+          if (Number.isFinite(hoursRaw) && hoursRaw > 0) {
+            ttlMs = Math.min(hoursRaw, cfg.oneClickAllow.maxHours * 3600 * 1000)
+          }
+          const allow = turnBudget.allowFor(sessionId, { ...ALLOW_SCOPE_FIELDS[scope], ttlMs })
+          const expires = allow.expiresAt ? iso(allow.expiresAt) : null
+          logger?.info?.('context-guard: 一键放行 (%s, %s): %s', scope, expires ? `至 ${expires}` : '本会话', sessionId)
+          sendJson(res, 200, { ok: true, sessionId, scope, ttlMs, allow, oneClickAllow: allowPublicConfig(cfg) })
+          return
+        }
+        if (action === 'revoke') {
+          const allow = turnBudget.revokeAllow(sessionId)
+          logger?.info?.('context-guard: 收回一键放行: %s', sessionId)
+          sendJson(res, 200, { ok: true, sessionId, allow, oneClickAllow: allowPublicConfig(cfg) })
+          return
+        }
+        if (action === 'query') {
+          reply(res, sessionId)
+          return
+        }
+        sendJson(res, 400, { ok: false, error: 'unknown-action' })
+      } catch (error) {
+        logger?.warn?.('context-guard: 一键放行请求失败: %s', error)
+        sendJson(res, 400, { ok: false, error: 'invalid-request' })
+      }
+    })
+    req.on('error', () => sendJson(res, 400, { ok: false, error: 'invalid-request' }))
+  }
+}
+
+function allowPublicConfig(cfg) {
+  return {
+    enabled: cfg.oneClickAllow.enabled,
+    maxHours: cfg.oneClickAllow.maxHours,
+    defaultHours: cfg.oneClickAllow.defaultHours,
+    envScope: cfg.oneClickAllow.envScope,
+    // 总开关：false 时整块风险检查跳过（不识别、不弹卡），面板据此置灰风险按钮。
+    riskCheckEnabled: cfg.riskCheckEnabled,
+  }
+}
+
 export function apply(ctx, config = {}) {
   const dir = typeof config.dir === 'string' && config.dir ? config.dir : undefined
   const cfg = guardConfig(config)
@@ -774,6 +943,9 @@ export function apply(ctx, config = {}) {
         }), 'context-guard: risk allow-rule route')
       })
     }
+  }
+  if (!cfg.riskCheckEnabled) {
+    ctx.logger?.warn?.('context-guard: riskCheckEnabled=false，风险命令检查已整体关闭（文档门禁/步数/lint 不受影响）')
   }
   const cache = new DedupCache({ ttlMs: cfg.dedupTtlMs, maxEntries: cfg.dedupMaxEntries })
   const metrics = new MetricsRecorder(cfg.metricsDir, { logger: ctx.logger })
@@ -806,6 +978,15 @@ export function apply(ctx, config = {}) {
   })
   if (cfg.cleanupEnabled) {
     void cleanupOutputs(cfg.outputDir, { ...cfg.cleanup }).catch(error => ctx.logger?.warn?.('context-guard: 启动清理失败: %s', error))
+  }
+  if (cfg.oneClickAllow.enabled && typeof ctx.inject === 'function') {
+    ctx.inject(['webServer'], routeCtx => {
+      routeCtx.effect(() => routeCtx.webServer.register({
+        kind: 'exact',
+        path: ALLOW_ENDPOINT,
+        handler: createAllowHandler({ turnBudget, cfg, logger: ctx.logger }),
+      }), 'context-guard: one-click allow route')
+    })
   }
 
   ctx.on('session/event', (session, event) => {
@@ -859,9 +1040,17 @@ export function apply(ctx, config = {}) {
     if (!cfg.enabled) return decision
 
     // 步数/压缩门禁最先判定：压缩只提醒不拒绝；回合/会话硬线只允许收尾交接，不再放行任何工具。
+    // 一键放行（步数）只影响这里：本会话不再 deny/ask，但核验态等后续判定优先级不变。
     const asks = []
+    const budgetSession = sessionIdOf(exec)
+    // GUARD_ALLOW=steps|risk|all：只给本次出现的会话预置（用户仍可在面板收回），用于确定性解卡。
+    if (cfg.oneClickAllow.enabled && cfg.oneClickAllow.envScope && budgetSession !== 'unknown-session' &&
+      !turnBudget.allowState(budgetSession).active) {
+      turnBudget.allowFor(budgetSession, ALLOW_SCOPE_FIELDS[cfg.oneClickAllow.envScope])
+      ctx.logger?.info?.('context-guard: GUARD_ALLOW=%s 已为本会话预置一键放行: %s', cfg.oneClickAllow.envScope, budgetSession)
+    }
+    const allow = turnBudget.allowState(budgetSession)
     if (cfg.stepBudget.enabled) {
-      const budgetSession = sessionIdOf(exec)
       const compaction = turnBudget.checkCompaction(budgetSession)
       if (compaction.warning && compaction.compactions === compaction.hardMaxCompactions) {
         ctx.logger?.warn?.('context-guard: 本会话已压缩 %s 次（硬线 %s），仍放行工具；建议先收敛结论或写交接',
@@ -925,13 +1114,22 @@ export function apply(ctx, config = {}) {
         }
       }
       if (risk.risk) {
-        ctx.logger?.info?.('context-guard: 风险命令待确认 (%s): %s', risk.level, risk.preview)
-        const ask = riskAskDecision(risk)
-        if (cfg.riskAutoAllowEnabled) {
-          const token = pendingRiskRules.add(command, risk, exec?.callId, riskCwd)
-          ask.reason = `${ask.reason}; rule-token: ${token}`
+        // 一键放行只跳过「风险询问」，灾难级（rm -rf /、dd 写盘、mkfs、关机等）一律照旧询问。
+        const catastrophic = allow.risk ? catastrophicReason(command) : null
+        if (catastrophic) {
+          ctx.logger?.info?.('context-guard: 灾难级命令不受一键放行影响 (%s)，仍询问: %s', catastrophic, risk.preview)
+          asks.push(riskAskDecision(risk))
+        } else if (allow.risk) {
+          ctx.logger?.info?.('context-guard: 一键放行跳过风险询问 (%s): %s', risk.level, risk.preview)
+        } else {
+          ctx.logger?.info?.('context-guard: 风险命令待确认 (%s): %s', risk.level, risk.preview)
+          const ask = riskAskDecision(risk)
+          if (cfg.riskAutoAllowEnabled) {
+            const token = pendingRiskRules.add(command, risk, exec?.callId, riskCwd)
+            ask.reason = `${ask.reason}; rule-token: ${token}`
+          }
+          asks.push(ask)
         }
-        asks.push(ask)
       }
     }
     if (cfg.commandLintEnabled && cfg.toolNames.includes(exec?.name)) {
@@ -953,6 +1151,7 @@ export function apply(ctx, config = {}) {
       const check = turnBudget.checkCall(sessionIdOf(exec))
       if (check.action === 'deny') return callLimitDenyDecision(check)
       if (check.action === 'ask') asks.push(budgetAskDecision(turnBudget.summary(sessionIdOf(exec)), null))
+      if (check.allowed) ctx.logger?.info?.('context-guard: 一键放行跳过调用硬线 (%s 次): %s', check.count, sessionIdOf(exec))
     }
     if (asks.length > 0) return mergeAskDecisions(asks)
     return decision
