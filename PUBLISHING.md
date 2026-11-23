@@ -1,6 +1,6 @@
 # 发布到 DSH 插件市场
 
-> 状态：**`0.6.0` 待发布（`npm publish` 需用户 2FA）；`0.5.0` 只有 npm、无 tag/Release；上一版 `0.4.4` 已发布，tag 与 GitHub Release `v0.4.4` 已推送（资产 `dsh-context-guard.tgz` 58586 字节，`latest/download` 返回 200）。**
+> 状态：**`0.6.0` 已发布（2026-11-24）：npm `dist-tags.latest` = `0.6.0`；GitHub Release `v0.6.0` 存在，资产 `dsh-context-guard.tgz` 91018 字节，`releases/latest/download/` 返回 200 且解包 `version: 0.6.0`；`v0.5.0` tag 已补推（无单独 Release）；市场条目描述 PR #18300 待合。**
 > 目标仓库：`person-clouds/dsh-context-guard`
 > npm 包名：`@fenghoer/dsh-context-guard`（npm 上 `dsh-context-guard` 已被其他项目占用）
 
