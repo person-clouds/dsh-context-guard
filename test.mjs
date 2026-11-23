@@ -1363,6 +1363,34 @@ const uncovered = runCompaction(['check'])
 assert.equal(uncovered.status, 1)
 assert.match(uncovered.stdout, /preset-minimal 未被 home patch 覆盖/)
 
+// --deep：disabled 的基础空壳条目不算 FAIL，启用条目 0.2/0.20 都算通过
+const deepBin = join(compactRoot, 'bin')
+await mkdir(deepBin, { recursive: true })
+const stubDump = lines => writeFile(join(deepBin, 'dsh'), `#!/usr/bin/env bash\ncat <<'EOF'\n${lines.join('\n')}\nEOF\n`).then(() => chmod(join(deepBin, 'dsh'), 0o755))
+const deepOkLines = [
+  '- id: compaction-basic',
+  "  name: '@deepseek-ai/dsh-compaction-basic'",
+  '  disabled: true',
+  '          - id: compaction-basic',
+  "            name: '@deepseek-ai/dsh-compaction-basic'",
+  '            config:',
+  '              thresholdRatio: 0.2',
+]
+await stubDump(deepOkLines)
+const appliedDeep = runCompaction(['apply'])
+assert.equal(appliedDeep.status, 0, appliedDeep.stderr)
+const runDeep = () => spawnSync('bash', [compaction, 'check', '--deep', '--profile', 'web', '--presets-dir', presetDir, '--patch', patchFile], {
+  encoding: 'utf8',
+  env: { ...process.env, PATH: `${deepBin}:${process.env.PATH}` },
+})
+const deepOk = runDeep()
+assert.equal(deepOk.status, 0, deepOk.stdout + deepOk.stderr)
+assert.match(deepOk.stdout, /PASS: preset-standard/)
+await stubDump(deepOkLines.map(line => line.replace('thresholdRatio: 0.2', 'thresholdRatio: 0.5')))
+const deepBad = runDeep()
+assert.equal(deepBad.status, 1)
+assert.match(deepBad.stdout, /未见 thresholdRatio: 0\.20/)
+
 
 // 文档提交门禁：真实 check.sh + 临时 fixture，坏文档拒绝、修复后放行
 assert.deepEqual(parseGitCommitCommand('git commit -m x'), { cwd: null })

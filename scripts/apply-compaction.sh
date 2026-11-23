@@ -324,15 +324,25 @@ def deep_check(presets):
         print((dump.stderr or '').strip()[:2000])
         return 1
     failed = 0
+    checked = 0
     lines = dump.stdout.splitlines()
     for i, line in enumerate(lines):
-        if 'compaction-basic' in line:
-            window = '\n'.join(lines[i:i + 8])
-            # dump-config 会把数值 0.20 压成 0.2，两种写法都算通过。
-            if re.search(r'thresholdRatio:\s*0\.2(?:0)?\b', window):
-                continue
-            failed = 1
-            print(f'FAIL: --dump-config 中 compaction-basic（第 {i + 1} 行起）未见 thresholdRatio: 0.20')
+        # 只看条目行，避免把 `- id: command-compact` 等相近名字算进来。
+        if not re.search(r'^\s*- id: compaction-basic\s*$', line):
+            continue
+        window = '\n'.join(lines[i:i + 8])
+        # 基础插件表里可能有 `disabled: true` 的空壳条目（已被 preset 覆盖），跳过。
+        if re.search(r'^\s*disabled:\s*true\s*$', window, re.M):
+            continue
+        # dump-config 会把数值 0.20 压成 0.2，两种写法都算通过。
+        if re.search(r'thresholdRatio:\s*0\.2(?:0)?\b', window):
+            checked += 1
+            continue
+        failed = 1
+        print(f'FAIL: --dump-config 中 compaction-basic（第 {i + 1} 行起）未见 thresholdRatio: 0.20')
+    if checked == 0:
+        failed = 1
+        print('FAIL: --dump-config 中没有启用的 compaction-basic 条目带 thresholdRatio: 0.20')
     return failed
 
 

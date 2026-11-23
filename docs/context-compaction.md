@@ -137,7 +137,7 @@ T / (T − R) = 0.8 / (0.8 − 0.16) ≈ 1.25
 - **agent preset 的 `plugins` 按 id 取第一个匹配项**：所以覆盖必须整段重写 `preset-standard`，
   把 default 的 plugins（含 plan-mode 长提示词）原样抄一遍，只给 `compaction-basic` 加 `config`。
   升级 dsh 后 preset 内容若变，需同步这份拷贝；官方 preset 摘要补丁在本层之后应用，出现「摘要补丁覆写」告警时要处理。
-- **目标值**（脚本注入）：`thresholdRatio: 0.20 / retainRatio: 0.03 / headroomTokens: 65536`；真实 home patch 当前仍是旧的 `0.08/0.02`，需在宿主执行 `scripts/apply-compaction.sh apply` 后生效。
+- **当前生效值**（`dsh --profile web --dump-config` 核对）：`thresholdRatio: 0.20 / retainRatio: 0.03 / headroomTokens: 65536`（2026-11-23 已在宿主 `apply`；下方旧值实测保留作对照）。
 - **阈值要按实际窗口算**（2026-11-23 修正）：适配器上报的窗口是 **1,048,576**（`dsh-llm-deepseek` 的 `OFFICIAL_CONTEXT_WINDOW`），
   不是 1e6。按源码 `resolveCompactSpec`：阈值 = `min(floor(1,048,576×0.20), 1,048,576−256,000−65,536)` = **209,715**，
   保留 = `floor(792,576×0.03)` = **23,777**。旧值 0.08 时阈值是 83,886，旧版按 1e6 估算的 80,000 差约 3.9 千。

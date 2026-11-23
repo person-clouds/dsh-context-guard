@@ -12,7 +12,8 @@
 - [x] 计划：[`plans/PLAN-compaction-user-continue.md`](plans/PLAN-compaction-user-continue.md) v2 —— 压缩永不 `deny`、阈值 `0.08 → 0.20`（余量约 15 万）、每轮提醒合并为一条、会话硬线可回复「继续」恢复 +30 步；
 - [x] 文档：`docs/context-compaction.md` 修正阈值按实际窗口 1,048,576 计算（83,886），并记录本次实测；
 - [x] 已实施：`checkCompaction` 永不 `deny`（≥硬线只 `warning`）；`scripts/apply-compaction.sh` 注入 `0.20/0.03`；每轮提醒合并为一条并汇总四类计数；会话硬线可回复「继续」+30 步；`npm test` 通过、5 份文档已同步。
-- [ ] 待用户：在宿主执行 `bash dsh-context-guard/scripts/apply-compaction.sh apply` 并重启 `dsh web`，再按计划 §验收 做实机复核。
+- [x] 配置已在宿主 `apply`：`check` 4 个 preset PASS，`check --deep --profile web` PASS（首轮 FAIL 是 `--dump-config` 基础表 `disabled: true` 空壳条目误判，已修复并加单测）。
+- [ ] 待验证：重启 `dsh web` 后按计划 §验收 做实机复核（压缩后不连环压、会话硬线可回复继续）。
 
 ## 2026-11-23 修复无 scheme fetch 目标反复报风险
 
@@ -166,5 +167,6 @@
 | 2026-11-22 | `apply-profile.sh` V 规则 denyTools 升级（fixture 实跑） | PASS：以真实 web profile 副本（已有 `sessionBudgets`，V 行原为 `denyTools: [write, edit]`）跑脚本，仅该行替换为含 7 个 `ops_*` 的列表，D 规则与 `40/80` 未变；二次执行无 diff（幂等） |
 | 2026-11-22 | `./scripts/check.sh --repo dsh-context-guard` | PASS（本轮提交前输出；README 超行数属既有篇幅） |
 | 2026-11-23 | `npm test`（压缩不拒 / 提醒合并 / 继续恢复） | ok；压缩 0/1/2/10 次均 `allow`（≥硬线仅 warning），同轮 ask 仅 1 条，会话 90 步 deny → 回复「继续」+30 → allow → 120 再 deny，`source.kind=user` 短回复生效而 `goal`/长句不生效，`continueResume: false` 关闭 |
-| 2026-11-23 | `bash scripts/apply-compaction.sh check`（真实 home patch） | FAIL（预期）：4 个 preset 仍为 `0.08/0.02`，`dry-run` 显示将原位替换为 `0.20/0.03`；`apply` 需用户在宿主执行 |
+| 2026-11-23 | 宿主 `apply` 后 `check` / `check --deep --profile web` | `check` 4 个 preset PASS；`--deep` 首轮报 2 条 FAIL，定位为 `--dump-config` 基础插件表的 `disabled: true` 空壳 `compaction-basic` 被误判（实际 preset 条目已为 `0.2`），修复后 PASS |
+| 2026-11-23 | `npm test`（`--deep` 回归） | ok；stub dump 覆盖 disabled 空壳跳过、`0.2`/`0.20` 两种写法通过、`0.5` 仍 FAIL |
 | 2026-11-23 | `./scripts/check.sh --repo dsh-context-guard` | PASS（13 篇文档，1 项既有 README 行数警告） |
