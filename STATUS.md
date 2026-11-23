@@ -5,13 +5,14 @@
 - 一句话：DSH 工具输出预算/落盘、去重、单轮调用/输出门禁、硬上限后 Web 自动填入「继续」、命令形态拦截、风险确认与窄规则自动放行（含按 cwd 的 `.tmp*` 清理与命令范围）、内置放行默认值外置、只读诊断、压缩归档与指标。
 - 位置：`dsh-context-guard/`；web profile 已按 link 加载并完成「始终允许」实机验证，superagent profile 待重启后核对。
 
-## 2026-11-23 诊断：压缩后余量不足会连环压缩并锁死会话（计划待实施）
+## 2026-11-23 压缩后余量不足与连环压缩（已实施，待用户 apply + 重启后实机复核）
 
 - [x] 定位：适配器窗口实为 **1,048,576**，阈值 = `floor(1,048,576×0.08)` = **83,886**；压缩后整包仍占 **60,101**，余量仅约 **2.4 万**，5 分钟内即二次压缩；
 - [x] 验证：第 2 次压缩后插件硬线拒绝全部工具调用，会话只能新开；`maxTokens` 256,000 是输出预留、「2 万」是压缩后保留的对话量，都不是窗口/触发线（本机 726 个会话日志中 `contextWindow` 只有 1,048,576 与 1,000,000）；
 - [x] 计划：[`plans/PLAN-compaction-user-continue.md`](plans/PLAN-compaction-user-continue.md) v2 —— 压缩永不 `deny`、阈值 `0.08 → 0.20`（余量约 15 万）、每轮提醒合并为一条、会话硬线可回复「继续」恢复 +30 步；
 - [x] 文档：`docs/context-compaction.md` 修正阈值按实际窗口 1,048,576 计算（83,886），并记录本次实测；
-- [ ] 待实施：本计划由其它会话执行，代码与 `scripts/apply-compaction.sh` 尚未改动，现行行为仍是「压缩第 2 次起拒绝」。
+- [x] 已实施：`checkCompaction` 永不 `deny`（≥硬线只 `warning`）；`scripts/apply-compaction.sh` 注入 `0.20/0.03`；每轮提醒合并为一条并汇总四类计数；会话硬线可回复「继续」+30 步；`npm test` 通过、5 份文档已同步。
+- [ ] 待用户：在宿主执行 `bash dsh-context-guard/scripts/apply-compaction.sh apply` 并重启 `dsh web`，再按计划 §验收 做实机复核。
 
 ## 2026-11-23 修复无 scheme fetch 目标反复报风险
 
@@ -164,3 +165,6 @@
 | 2026-11-22 | `npm test`（V 只读补 ops 写工具） | ok；新增断言：默认 V 规则 `denyTools` 含 `ops_write_file`/`ops_edit_file`/`ops_replace`/`ops_remove`/`ops_move`/`ops_copy`/`ops_batch`，与 `write`/`edit` 一起锁定 |
 | 2026-11-22 | `apply-profile.sh` V 规则 denyTools 升级（fixture 实跑） | PASS：以真实 web profile 副本（已有 `sessionBudgets`，V 行原为 `denyTools: [write, edit]`）跑脚本，仅该行替换为含 7 个 `ops_*` 的列表，D 规则与 `40/80` 未变；二次执行无 diff（幂等） |
 | 2026-11-22 | `./scripts/check.sh --repo dsh-context-guard` | PASS（本轮提交前输出；README 超行数属既有篇幅） |
+| 2026-11-23 | `npm test`（压缩不拒 / 提醒合并 / 继续恢复） | ok；压缩 0/1/2/10 次均 `allow`（≥硬线仅 warning），同轮 ask 仅 1 条，会话 90 步 deny → 回复「继续」+30 → allow → 120 再 deny，`source.kind=user` 短回复生效而 `goal`/长句不生效，`continueResume: false` 关闭 |
+| 2026-11-23 | `bash scripts/apply-compaction.sh check`（真实 home patch） | FAIL（预期）：4 个 preset 仍为 `0.08/0.02`，`dry-run` 显示将原位替换为 `0.20/0.03`；`apply` 需用户在宿主执行 |
+| 2026-11-23 | `./scripts/check.sh --repo dsh-context-guard` | PASS（13 篇文档，1 项既有 README 行数警告） |

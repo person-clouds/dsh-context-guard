@@ -20,6 +20,7 @@ import { analyzeCommand, riskAskDecision } from './lib/risk.js'
 import { PendingRiskRules, RISK_RULE_ENDPOINT, RiskRuleStore, effectiveAllowHosts, filterRiskByRules, normalizeRuleReason, ruleSpecsFor } from './lib/risk-allow.js'
 import { lintCommand, lintDecision } from './lib/command-lint.js'
 import {
+  DEFAULT_CONTINUE_GRACE_SESSION_STEPS,
   DEFAULT_HARD_MAX_COMPACTIONS,
   DEFAULT_HARD_MAX_STEPS_PER_SESSION,
   DEFAULT_HARD_MAX_STEPS_PER_TURN,
@@ -47,6 +48,8 @@ export { HARD_LIMIT_DRAFT_MARKER } from './lib/continue-draft.js'
 
 const DEFAULT_TOOL_NAMES = ['bash', 'persistent-bash', 'terminal-bash']
 const DEFAULT_DISPATCH_TOOLS = ['subagent', 'subagent_fork', 'workflow']
+/** 会话硬线后允许用户显式恢复的默认回复词；normalize 后做前缀匹配（如「继续吧」「继续执行」）。 */
+const DEFAULT_CONTINUE_KEYWORDS = ['继续', 'continue']
 
 function textOf(content) {
   return contentText(content)
@@ -58,6 +61,17 @@ function textOf(content) {
 
 function userText(event) {
   return textOf(event?.data?.content)
+}
+
+/** 用户回复是否只是「继续」这类许可：去掉空白/标点后做前缀匹配，避免长句里带「继续」也误恢复。 */
+function isContinueText(text, keywords) {
+  const normalized = String(text || '').toLowerCase().replace(/[\s。.!！,，、；;：:]/g, '')
+  if (!normalized) return false
+  return keywords.some(keyword => {
+    const word = String(keyword || '').toLowerCase().replace(/[\s。.!！,，、；;：:]/g, '')
+    if (!word) return false
+    return normalized === word || (normalized.startsWith(word) && normalized.length <= word.length + 4)
+  })
 }
 
 function iso(ms) {
@@ -258,6 +272,13 @@ function guardConfig(config) {
       hardMaxStepsPerSession: Number(config.stepBudget?.hardMaxStepsPerSession) || DEFAULT_HARD_MAX_STEPS_PER_SESSION,
       maxCompactions: Number(config.stepBudget?.maxCompactions) || DEFAULT_MAX_COMPACTIONS,
       hardMaxCompactions: Number(config.stepBudget?.hardMaxCompactions) || DEFAULT_HARD_MAX_COMPACTIONS,
+      continueResume: config.stepBudget?.continueResume !== false,
+      continueGraceSessionSteps: Number(config.stepBudget?.continueGraceSessionSteps)
+        || DEFAULT_CONTINUE_GRACE_SESSION_STEPS,
+      continueKeywords: Array.isArray(config.stepBudget?.continueKeywords)
+        && config.stepBudget.continueKeywords.length > 0
+        ? config.stepBudget.continueKeywords.map(String)
+        : DEFAULT_CONTINUE_KEYWORDS,
     },
     sessionBudgets: Array.isArray(config.sessionBudgets) ? config.sessionBudgets : DEFAULT_SESSION_BUDGETS,
     sessionTitleTtlMs: Number(config.sessionTitleTtlMs) || 5000,
@@ -402,15 +423,17 @@ function dispatchDuplicateDecision(key, firstAt) {
   }
 }
 
-function callLimitAskDecision(check) {
-  const step = stepLabel(check.step, 'zh')
+/** 每轮最多一条的合并提醒：把会话步数 / 本轮步数 / 命令调用 / 压缩次数放在同一张卡片里。 */
+function budgetAskDecision(summary, scope) {
+  const approx = summary.approx ? '（近似计步）' : ''
+  const scopeZh = scope === 'session' ? '本会话累计步数已达提醒点' : scope === 'turn' ? '本轮步数已达提醒点' : '本轮命令调用已达提醒点'
+  const continueHint = summary.graceSteps > 0 ? `；本轮已由「继续」恢复 ${summary.graceSteps} 步` : ''
   return {
     kind: 'ask',
-    reason: `context-guard call-limit: 本轮 bash 调用达到 ${check.count} 次提醒点（每 ${check.maxCallsPerTurn} 次提醒一次），是否继续？`,
+    reason: `context-guard step-budget: ${scopeZh}${approx}。本轮 ${summary.steps} 步 / 本会话 ${summary.sessionSteps} 步，本轮 bash ${summary.calls} 次，本会话已压缩 ${summary.compactions} 次${continueHint}；是否继续？建议先收敛「已完成 / 未完成 / 下一步」。`,
     displayReason: {
-      en: `This turn has reached ${check.count} bash calls (a reminder every ${check.maxCallsPerTurn} calls). Continue? The hard deny is at ${check.hardMaxCallsPerTurn} calls. Bash calls and session step are different counters.`,
-      zh: `本轮 bash 调用达到 ${check.count} 次提醒点（每 ${check.maxCallsPerTurn} 次提醒一次），是否继续？
-当前是本轮第 ${check.count} 次 bash 调用；第 ${check.hardMaxCallsPerTurn} 次起会拒绝执行。注意：bash 调用次数与 session step 不是同一口径。建议合并命令、改用 inspect.sh，或先汇报进展。`,
+      en: `context-guard step-budget: ${scope === 'session' ? 'session step' : scope === 'turn' ? 'turn step' : 'bash call'} reminder${approx}. Turn ${summary.steps} steps / session ${summary.sessionSteps} steps, ${summary.calls} bash calls this turn, ${summary.compactions} compaction(s) this session${summary.graceSteps > 0 ? `, +${summary.graceSteps} steps resumed by "continue"` : ''}. Continue? Write "done / todo / next" first. Limits: turn ${summary.maxStepsPerTurn}/${summary.hardMaxStepsPerTurn}, session ${summary.maxStepsPerSession}/${summary.hardMaxStepsPerSession}, calls ${summary.maxCallsPerTurn}/${summary.hardMaxCallsPerTurn}, compactions soft ${summary.maxCompactions} (never denied).`,
+      zh: `${scopeZh}${approx}。本轮 ${summary.steps} 步 / 本会话 ${summary.sessionSteps} 步，本轮 bash 调用 ${summary.calls} 次，本会话已压缩 ${summary.compactions} 次${continueHint}。上限：回合 ${summary.maxStepsPerTurn}/${summary.hardMaxStepsPerTurn}、会话 ${summary.maxStepsPerSession}/${summary.hardMaxStepsPerSession}、调用 ${summary.maxCallsPerTurn}/${summary.hardMaxCallsPerTurn}；压缩只提醒不拒绝。建议先收敛：已完成 / 未完成 / 下一步。`,
     },
   }
 }
@@ -422,61 +445,27 @@ function callLimitDenyDecision(check) {
   }
 }
 
-function stepAskDecision(check) {
-  const bySession = check.scope === 'session'
-  const count = bySession ? check.sessionSteps : check.steps
-  const soft = bySession ? check.maxStepsPerSession : check.maxStepsPerTurn
-  const hard = bySession ? check.hardMaxStepsPerSession : check.hardMaxStepsPerTurn
-  const scopeZh = bySession ? '本会话累计' : '本轮'
-  const scopeEn = bySession ? 'this session' : 'this turn'
-  return {
-    kind: 'ask',
-    reason: `context-guard step-budget: ${scopeZh} ${count} 步，达到提醒点 ${soft}（硬线 ${hard}）；是否继续？建议先写「已完成 / 未完成 / 下一步」再决定是否继续取证。`,
-    displayReason: {
-      en: `context-guard step-budget: ${scopeEn} reached ${count} steps (reminder at ${soft}, hard deny at ${hard}). Continue? Write "done / todo / next" first, then decide whether more evidence is worth the cost.`,
-      zh: `${scopeZh} ${count} 步，达到提醒点 ${soft}（硬线 ${hard}）。建议先收敛：已完成 / 未完成 / 下一步，再决定是否继续取证。`,
-    },
-  }
-}
-
-function stepDenyDecision(check) {
+function stepDenyDecision(check, options = {}) {
   if (check.scope === 'session') {
-    const reason = `context-guard step-budget: 本会话累计 ${check.sessionSteps} 步，达到会话硬线 ${check.hardMaxStepsPerSession}；后续工具调用已拒绝。请在最终回复写 3 行交接（已完成 / 未完成 / 下一步），然后新开会话继续。`
+    const revive = options.continueResume === false
+      ? ''
+      : `；确需在本会话继续，可在输入框回复「继续」恢复 +${options.continueGraceSessionSteps || 30} 步（每次一条，可多次）。`
+    const reviveEn = options.continueResume === false
+      ? ''
+      : ` If you really need this session, reply "continue" to extend it by ${options.continueGraceSessionSteps || 30} steps (one per message, repeatable).`
+    const reason = `context-guard step-budget: 本会话累计 ${check.sessionSteps} 步，达到会话硬线 ${check.hardMaxStepsPerSession}；后续工具调用已拒绝。请在最终回复写 3 行交接（已完成 / 未完成 / 下一步）${revive}`
     return {
       kind: 'deny',
       reason,
       displayReason: {
-        en: `context-guard step-budget: this session reached ${check.sessionSteps} steps (session hard deny at ${check.hardMaxStepsPerSession}); further tool calls are blocked. Write a 3-line handover (done / todo / next) in your final reply, then continue in a new session.`,
-        zh: `本会话累计 ${check.sessionSteps} 步，达到会话硬线 ${check.hardMaxStepsPerSession}，后续工具调用已拒绝。请在最终回复写 3 行交接（已完成 / 未完成 / 下一步），再新开会话继续；本会话不会自动续跑。`,
+        en: `context-guard step-budget: this session reached ${check.sessionSteps} steps (session hard deny at ${check.hardMaxStepsPerSession}); further tool calls are blocked. Write a 3-line handover (done / todo / next) in your final reply.${reviveEn}`,
+        zh: `本会话累计 ${check.sessionSteps} 步，达到会话硬线 ${check.hardMaxStepsPerSession}，后续工具调用已拒绝。请在最终回复写 3 行交接（已完成 / 未完成 / 下一步）${revive}`,
       },
     }
   }
   return {
     kind: 'deny',
     reason: `context-guard step-budget: 本轮 ${check.steps} 步，达到单回合硬线 ${check.hardMaxStepsPerTurn}；请拆任务或先汇报进展。 ${HARD_LIMIT_DRAFT_MARKER}`,
-  }
-}
-
-function compactionAskDecision(check) {
-  return {
-    kind: 'ask',
-    reason: `context-guard step-budget: 本会话已压缩 ${check.compactions} 次（提醒点 ${check.maxCompactions}），上下文已反复重建；是否继续？建议先收敛结论或写交接。`,
-    displayReason: {
-      en: `context-guard step-budget: this session has compacted ${check.compactions} time(s) (reminder at ${check.maxCompactions}); context keeps being rebuilt. Continue, or consolidate the conclusion / hand over instead?`,
-      zh: `本会话已压缩 ${check.compactions} 次（提醒点 ${check.maxCompactions}）。建议先收敛结论：已完成 / 未完成 / 下一步，再决定是否继续工具取证。`,
-    },
-  }
-}
-
-function compactionDenyDecision(check) {
-  const reason = `context-guard step-budget: 本会话已压缩 ${check.compactions} 次，达到硬线 ${check.hardMaxCompactions}；后续工具调用已拒绝。请在最终回复写 3 行交接（已完成 / 未完成 / 下一步），然后新开会话继续。`
-  return {
-    kind: 'deny',
-    reason,
-    displayReason: {
-      en: `context-guard step-budget: this session compacted ${check.compactions} times (hard deny at ${check.hardMaxCompactions}); further tool calls are blocked. Write a 3-line handover (done / todo / next) in your final reply, then continue in a new session.`,
-      zh: `本会话已压缩 ${check.compactions} 次，达到硬线 ${check.hardMaxCompactions}，后续工具调用已拒绝。请在最终回复写 3 行交接（已完成 / 未完成 / 下一步），再新开会话继续；本会话不会自动续跑。`,
-    },
   }
 }
 
@@ -808,6 +797,7 @@ export function apply(ctx, config = {}) {
     hardMaxStepsPerSession: cfg.stepBudget.hardMaxStepsPerSession,
     maxCompactions: cfg.stepBudget.maxCompactions,
     hardMaxCompactions: cfg.stepBudget.hardMaxCompactions,
+    continueGraceSessionSteps: cfg.stepBudget.continueGraceSessionSteps,
     budgetFor: sessionId => {
       const title = titleCache.read(sessionId)
       return title === undefined ? null : matchBudget(budgetRules, title)
@@ -819,6 +809,19 @@ export function apply(ctx, config = {}) {
   }
 
   ctx.on('session/event', (session, event) => {
+    if (event.type === 'user/message') {
+      if (!cfg.stepBudget.enabled || !cfg.stepBudget.continueResume) return
+      // 只认真人输入（source.kind === 'user'）；子任务/团队消息/系统注入不解除会话硬线。
+      if (event.data?.source?.kind !== 'user') return
+      const text = userText(event)
+      if (!isContinueText(text, cfg.stepBudget.continueKeywords)) return
+      const resumed = turnBudget.resumeByUser(session?.id || 'unknown-session')
+      if (resumed.resumed) {
+        ctx.logger?.info?.('context-guard: 用户回复「继续」，会话硬线恢复到 %s 步: %s',
+          resumed.hardMaxStepsPerSession, session?.id || 'unknown-session')
+      }
+      return
+    }
     if (event.type === 'turn/start') {
       turnBudget.startTurn(session?.id || 'unknown-session', event.data?.turn)
       return
@@ -835,11 +838,12 @@ export function apply(ctx, config = {}) {
     }
     if (event.type !== 'compaction/summary') return
     const summary = textOf(event.data?.summary)
-    const compaction = turnBudget.noteCompaction(session?.id || 'unknown-session')
+    const compaction = turnBudget.noteCompaction(session?.id || 'unknown-session', event.seq)
     if (compaction.action !== 'allow') {
-      ctx.logger?.warn?.('context-guard: 本会话压缩 %s 次（提醒点 %s / 硬线 %s），%s', compaction.compactions,
-        compaction.maxCompactions, compaction.hardMaxCompactions,
-        compaction.action === 'deny' ? '后续工具调用将被拒绝' : '建议先收敛结论')
+      ctx.logger?.warn?.(
+        'context-guard: 本会话已压缩 %s 次（提醒点 %s / 硬线 %s），压缩只提醒不拒绝工具；建议先收敛结论或写交接',
+        compaction.compactions, compaction.maxCompactions, compaction.hardMaxCompactions,
+      )
     }
     void writeArchive(session, '压缩完成', summary, {
       trigger: event.data?.sourceCommandId ? 'manual' : 'automatic',
@@ -854,22 +858,21 @@ export function apply(ctx, config = {}) {
     if (decision.kind !== 'allow') return decision
     if (!cfg.enabled) return decision
 
-    // 步数/压缩门禁最先判定：压缩硬线与会话硬线只允许收尾交接，不再放行任何工具。
+    // 步数/压缩门禁最先判定：压缩只提醒不拒绝；回合/会话硬线只允许收尾交接，不再放行任何工具。
     const asks = []
     if (cfg.stepBudget.enabled) {
       const budgetSession = sessionIdOf(exec)
       const compaction = turnBudget.checkCompaction(budgetSession)
-      if (compaction.action === 'deny') {
-        ctx.logger?.info?.('context-guard: 会话压缩硬线拦截: %s', budgetSession)
-        return compactionDenyDecision(compaction)
+      if (compaction.warning && compaction.compactions === compaction.hardMaxCompactions) {
+        ctx.logger?.warn?.('context-guard: 本会话已压缩 %s 次（硬线 %s），仍放行工具；建议先收敛结论或写交接',
+          compaction.compactions, compaction.hardMaxCompactions)
       }
-      if (compaction.action === 'ask') asks.push(compactionAskDecision(compaction))
       const step = turnBudget.checkStep(budgetSession)
       if (step.action === 'deny') {
         ctx.logger?.info?.('context-guard: %s步数硬线拦截: %s', step.scope === 'session' ? '会话' : '回合', budgetSession)
-        return stepDenyDecision(step)
+        return stepDenyDecision(step, cfg.stepBudget)
       }
-      if (step.action === 'ask') asks.push(stepAskDecision(step))
+      if (step.action === 'ask') asks.push(budgetAskDecision(turnBudget.summary(budgetSession), step.scope))
     }
 
     // 派单去重：只有 prompt 声明了「快照：<sha>」才参与，普通子任务不受影响。
@@ -949,7 +952,7 @@ export function apply(ctx, config = {}) {
     if (cfg.toolNames.includes(exec?.name)) {
       const check = turnBudget.checkCall(sessionIdOf(exec))
       if (check.action === 'deny') return callLimitDenyDecision(check)
-      if (check.action === 'ask') asks.push(callLimitAskDecision(check))
+      if (check.action === 'ask') asks.push(budgetAskDecision(turnBudget.summary(sessionIdOf(exec)), null))
     }
     if (asks.length > 0) return mergeAskDecisions(asks)
     return decision

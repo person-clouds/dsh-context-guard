@@ -100,9 +100,9 @@ dsh --profile web --dump-config | grep -E "context-guard|maxOutputChars|tool-res
 ## 单轮门禁与命令提示
 
 - **调用门禁**：同一轮 bash 每 80 次返回一次 `ask`（第 80 次），第 160 次起 `deny`；拒绝结果带标记 `context-guard:hard-limit-draft`，Web 在输入框为空时自动写入「继续」（不自动发送，按 Enter 才继续，同 session 最多 3 次、同 turn 最多 1 次，打开会话时对 30 分钟内事件补写；Desktop/TUI 静默降级）。`turn/start` 清零；缺少该事件时退化为按 session 计数并记 warning。文案同时显示「本轮 bash 调用次数」和当前 `session step`，两者口径不同。
-- **步数门禁**：按 `step/start` 事件计步（同一 step 内多次工具调用只算 1 步），单回合第 30 步 / 会话累计第 60 步各返回一次 `ask`，第 40 / 90 步起 `deny`；`ask` 每回合、每会话只提醒一次。缺少 `step/start` 事件时退化为按工具调用计步（结果标 `approx`）。回合硬拒保留 `context-guard:hard-limit-draft` 标记，可按 Enter 续一轮；会话硬拒与压缩硬拒不写该标记，只要求最终回复写 3 行交接（已完成 / 未完成 / 下一步）后新开会话。
-- **压缩门禁**：`compaction/summary` 累计第 1 次返回 `ask`，第 2 次起 `deny`，用于阻止「压缩—继续—再压缩」的长会话。
-- **核验态步数**：`V：` 会话单回合收紧到第 25 步提醒 / 第 40 步硬拒；会话与压缩阈值仍用全局 60 / 90、1 / 2。
+- **步数门禁**：按 `step/start` 事件计步（同一 step 内多次工具调用只算 1 步），单回合第 30 步 / 会话累计第 60 步提醒，第 40 / 90 步起 `deny`；`ask` 每回合最多一条，并与调用提醒合并成同一条文案（汇总本轮步数 / 会话步数 / 本轮 bash 调用 / 压缩次数），会话步数提醒每会话仅一次。缺少 `step/start` 事件时退化为按工具调用计步（结果标 `approx`）。回合硬拒保留 `context-guard:hard-limit-draft` 标记，可按 Enter 续一轮；会话硬拒不写该标记，文案提示可回复「继续」恢复 +30 步（仅 `source.kind=user` 的短回复生效，可多次；`stepBudget.continueResume: false` 可关闭）。
+- **压缩提醒**：`compaction/summary` 只累计压缩次数，**从不 `deny`**；次数并入每轮提醒文案，达到 `hardMaxCompactions` 只记 warning。压缩后余量由阈值保证，见下文「压缩阈值自检」。
+- **核验态步数**：`V：` 会话单回合收紧到第 25 步提醒 / 第 40 步硬拒；会话阈值仍用全局 60 / 90，压缩阈值仍用 1 / 2 且只告警。
 - **累计输出门禁**：本轮实际进入上下文超过 `maxTurnOutputChars=40000` 后，后续超过 `exhaustedOutputChars=800` 的结果完整落盘，上下文只留 ≤800 字符摘要 + 路径。
 - **命令拦截**：默认 `commandLintMode: deny`。整文件 `cat` 提示改用当前文件工具按段读（`ops_inspect_local_file({ path, offset, limit })` 或官方 `read`）或 `sed -n '1,120p'`；无排除递归搜索提示改用 `ops_grep`/`grep` 或加 `--glob '!**/node_modules/**'`；裸 `curl .../api/...` 提示改用 `| jq '{field1,field2}'` 或 `-o /tmp/out.json` 后再查询。
 - DSH 不支持在 `tools/pre-execute` 中改写工具参数，所以插件不会自动把 `cat` 换成文件读取工具；它只拒绝当前调用，并在模型可见的 `reason` 里给出替代命令，由模型重新发起有界调用。
@@ -224,7 +224,7 @@ dsh-context-guard/scripts/install-linuxops.sh --uninstall
 
 ## 压缩阈值自检
 
-`~/.dsh/cordis.patch.yml` 覆盖了四个内置 preset 的 `compaction-basic` 阈值（`0.08/0.02/65536`）。这份拷贝整段抄自安装包，DSH 升级后可能过期，用脚本自检/重放：
+`~/.dsh/cordis.patch.yml` 覆盖了四个内置 preset 的 `compaction-basic` 阈值（`0.20/0.03/65536`；按窗口 1,048,576 计算触发线 209,715，压缩后余量约 15 万）。这份拷贝整段抄自安装包，DSH 升级后可能过期，用脚本自检/重放：
 
 ```bash
 bash dsh-context-guard/scripts/apply-compaction.sh check     # 只读自检，全部 PASS 退出 0
@@ -249,14 +249,17 @@ bash dsh-context-guard/scripts/apply-compaction.sh apply     # 备份后原位�
         hardMaxCallsPerTurn: 160         # 第 160 次硬拒绝并自动填「继续」
         maxTurnOutputChars: 40000
         exhaustedOutputChars: 800
-        stepBudget:                      # 步数与压缩门禁；enabled: false 整体关闭
+        stepBudget:                      # 步数与压缩提醒；enabled: false 整体关闭
           enabled: true
-          maxStepsPerTurn: 30            # 单回合提醒
+          maxStepsPerTurn: 30            # 单回合提醒（与调用提醒每轮合并一条）
           hardMaxStepsPerTurn: 40        # 单回合硬拒绝
           maxStepsPerSession: 60         # 会话累计提醒
-          hardMaxStepsPerSession: 90     # 会话累计硬拒绝
-          maxCompactions: 1              # 压缩 1 次后提醒
-          hardMaxCompactions: 2          # 压缩 2 次后硬拒绝
+          hardMaxStepsPerSession: 90     # 会话累计硬拒绝，可回复「继续」+30
+          maxCompactions: 1              # 压缩 1 次后仅 warning
+          hardMaxCompactions: 2          # 压缩 2 次后仅 warning，从不拒绝
+          continueResume: true           # 允许用户回复「继续」恢复会话硬线
+          continueGraceSessionSteps: 30  # 每次恢复的步数
+          # continueKeywords: [继续, continue]
         # sessionBudgets: 整体替换默认规则；见「核验态与派单去重」，默认 V: 会话 25/40/20000
         # dispatchGuard: {enabled: true, windowMs: 7200000, overrideToken: verify-again}
         commandLintEnabled: true

@@ -105,8 +105,8 @@ deep = deep == '1'
 
 # 期望的 compaction-basic 配置；顺序即写盘顺序。
 DESIRED = [
-    ('thresholdRatio', '0.08'),
-    ('retainRatio', '0.02'),
+    ('thresholdRatio', '0.20'),
+    ('retainRatio', '0.03'),
     ('headroomTokens', '65536'),
 ]
 # 宿主在 apply-profile.sh 里给 preset-minimal 加的附加配置，重写时按原位置保留。
@@ -328,10 +328,11 @@ def deep_check(presets):
     for i, line in enumerate(lines):
         if 'compaction-basic' in line:
             window = '\n'.join(lines[i:i + 8])
-            if 'thresholdRatio: 0.08' in window:
+            # dump-config 会把数值 0.20 压成 0.2，两种写法都算通过。
+            if re.search(r'thresholdRatio:\s*0\.2(?:0)?\b', window):
                 continue
             failed = 1
-            print(f'FAIL: --dump-config 中 compaction-basic（第 {i + 1} 行起）未见 thresholdRatio: 0.08')
+            print(f'FAIL: --dump-config 中 compaction-basic（第 {i + 1} 行起）未见 thresholdRatio: 0.20')
     return failed
 
 

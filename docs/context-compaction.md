@@ -137,15 +137,16 @@ T / (T − R) = 0.8 / (0.8 − 0.16) ≈ 1.25
 - **agent preset 的 `plugins` 按 id 取第一个匹配项**：所以覆盖必须整段重写 `preset-standard`，
   把 default 的 plugins（含 plan-mode 长提示词）原样抄一遍，只给 `compaction-basic` 加 `config`。
   升级 dsh 后 preset 内容若变，需同步这份拷贝；官方 preset 摘要补丁在本层之后应用，出现「摘要补丁覆写」告警时要处理。
-- **当前生效值**（`dsh --profile web --dump-config` 核对）：`thresholdRatio: 0.08 / retainRatio: 0.02 / headroomTokens: 65536`。
+- **目标值**（脚本注入）：`thresholdRatio: 0.20 / retainRatio: 0.03 / headroomTokens: 65536`；真实 home patch 当前仍是旧的 `0.08/0.02`，需在宿主执行 `scripts/apply-compaction.sh apply` 后生效。
 - **阈值要按实际窗口算**（2026-11-23 修正）：适配器上报的窗口是 **1,048,576**（`dsh-llm-deepseek` 的 `OFFICIAL_CONTEXT_WINDOW`），
-  不是 1e6。按源码 `resolveCompactSpec`：阈值 = `min(floor(1,048,576×0.08), 1,048,576−256,000−65,536)` = **83,886**，
-  保留 = `floor(792,576×0.02)` = **15,851**。旧版按 1e6 估算的 80,000 与实际差约 3.9 千，以本节为准。
-- **实测（2026-11-23，session `4a4b59bb`）**：压缩前 83,878 / 84,113 触发，与 83,886 一致；压缩后整包仍占 **60,101**
-  （固定开销约 3.6 万 + 保留原文 + 摘要），距阈值只剩 **约 2.4 万**，5 分钟后就发生第二次压缩；第 2 次后插件硬线把后续工具全部拒绝，会话只能新开。
+  不是 1e6。按源码 `resolveCompactSpec`：阈值 = `min(floor(1,048,576×0.20), 1,048,576−256,000−65,536)` = **209,715**，
+  保留 = `floor(792,576×0.03)` = **23,777**。旧值 0.08 时阈值是 83,886，旧版按 1e6 估算的 80,000 差约 3.9 千。
+- **实测（2026-11-23，session `4a4b59bb`，旧阈值 0.08）**：压缩前 83,878 / 84,113 触发，与 83,886 一致；压缩后整包仍占 **60,101**
+  （固定开销约 3.6 万 + 保留原文 + 摘要），距旧阈值只剩 **约 2.4 万**，5 分钟后就发生第二次压缩。按新阈值 209,715 复算，
+  压缩后余量约 **149,614（≈15 万）**，是旧值的 6.2 倍，可避免「刚压完又压」。
   「看着只用了 2 万」是压缩后保留的对话量（`shadowedTokenCount` 22,919）；`maxTokens` 256,000 是单次输出预留，两者都不是窗口或触发线。
-- 代价：压缩频率是默认值（0.8）的 10 倍，摘要请求次数与总额外 token 显著上升，属用户明确要求的取舍；
-  余量不足导致的连环压缩见 [`plans/PLAN-compaction-user-continue.md`](../plans/PLAN-compaction-user-continue.md)（拟改 `0.20`，**待实施**）。
+- 代价：阈值 0.20 下单次摘要输入最多约 21 万 token，压缩成本约 2.5 倍，但压缩次数显著下降；若成本敏感可退到 0.15（阈值 157,286、余量约 9.7 万）。
+  [`plans/PLAN-compaction-user-continue.md`](../plans/PLAN-compaction-user-continue.md) 已实施：压缩永不 `deny`、提醒合并、会话硬线可回复「继续」+30 步。
 
 ### 5.2 推理档位：别用 `thinking: disabled` 去"省 token"
 
@@ -174,7 +175,7 @@ T / (T − R) = 0.8 / (0.8 − 0.16) ≈ 1.25
 当时的临时脚本留在 `personalCloud/task/dsh-token-control/`，已不再推荐执行。
 
 验证判据：`--dump-config` 中每个 `id: compaction-basic` 后都必须出现
-`thresholdRatio: 0.08`；只看 `preset-standard` 不算通过。日常自检直接跑
+`thresholdRatio: 0.20`；只看 `preset-standard` 不算通过。日常自检直接跑
 `bash scripts/apply-compaction.sh check`。
 
 ### 5.4 2026-11-14 新增：压缩结果落盘为 STATUS
@@ -219,7 +220,8 @@ DSH 升级后：`check` 报 FAIL 就说明拷贝已过期，`apply` 后 `check` 
 
 ## 6. 一句话备忘
 
-- 默认 0.8 对 1M 窗口是合理值；本机已按用户要求改为 0.08（按实际窗口 1,048,576 算约 **8.4 万** token 触发，见 5.1、5.3）。
+- 默认 0.8 对 1M 窗口是合理值；本机已按用户要求改为 0.20（按实际窗口 1,048,576 算 **209,715** 触发、压缩后余量约 **15 万**，见 5.1、5.3）。
+- 压缩只累计次数、永不拒绝工具；每轮最多一条提醒并汇总会话步数 / 本轮步数 / bash 调用 / 压缩次数；会话硬线可回复「继续」+30 步。
 - 升级 DSH 后先跑 `bash scripts/apply-compaction.sh check`，FAIL 就 `apply` 再重启。
 - 想立刻压缩一次：用户执行 `/compact`（它做一次「低于自动阈值的有用压缩」，可反复用）。
 - 手动压缩的合适时机是**任务达到干净边界**时——此时摘要质量最好；中途压缩容易丢细节。

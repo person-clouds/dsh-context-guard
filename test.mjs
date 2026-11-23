@@ -112,7 +112,7 @@ for (let i = 61; i <= 69; i++) {
   assert.equal(stepBudget.checkStep('steps').action, 'allow', `会话第 ${i} 步不应拒绝`)
 }
 stepBudget.noteStep('steps', 70)
-assert.equal(stepBudget.checkStep('steps').scope, 'turn', '第 70 步回到回合提醒')
+assert.equal(stepBudget.checkStep('steps').action, 'allow', '同一轮已有提醒，第 70 步不再重复')
 for (let i = 71; i <= 79; i++) {
   stepBudget.noteStep('steps', i)
   assert.equal(stepBudget.checkStep('steps').action, 'allow', `会话第 ${i} 步不应拒绝`)
@@ -137,17 +137,69 @@ assert.equal(fallbackAsk.action, 'ask')
 assert.equal(fallbackAsk.approx, true)
 for (let i = 31; i <= 39; i++) assert.equal(fallbackSteps.checkStep('fallback-steps').action, 'allow')
 assert.equal(fallbackSteps.checkStep('fallback-steps').action, 'deny')
-// 压缩门禁：0 次放行、第 1 次提醒、第 2 次拒绝
+// 压缩只提醒不拒绝：0/1/2/10 次 checkCompaction 均 allow；达到硬线只带 warning
 const compactionBudget = new TurnBudget({ logger: { warn() {} } })
 assert.equal(compactionBudget.checkCompaction('compact').action, 'allow')
 assert.equal(compactionBudget.checkCompaction('compact').compactions, 0)
-assert.equal(compactionBudget.noteCompaction('compact').action, 'ask')
-assert.equal(compactionBudget.checkCompaction('compact').action, 'ask')
-assert.equal(compactionBudget.checkCompaction('compact').action, 'allow', '提醒后不重复')
-assert.equal(compactionBudget.noteCompaction('compact').action, 'deny')
-const compactionDeny = compactionBudget.checkCompaction('compact')
-assert.equal(compactionDeny.action, 'deny')
-assert.equal(compactionDeny.hardMaxCompactions, 2)
+assert.equal(compactionBudget.noteCompaction('compact', 7).action, 'warn')
+const compactWarn1 = compactionBudget.checkCompaction('compact')
+assert.equal(compactWarn1.action, 'allow')
+assert.equal(compactWarn1.warning, false)
+assert.equal(compactWarn1.lastCompactionSeq, 7)
+assert.equal(compactionBudget.noteCompaction('compact', 9).action, 'warn-hard')
+const compactHard = compactionBudget.checkCompaction('compact')
+assert.equal(compactHard.action, 'allow')
+assert.equal(compactHard.warning, true)
+assert.equal(compactHard.hardMaxCompactions, 2)
+for (let i = 3; i <= 10; i++) {
+  compactionBudget.noteCompaction('compact', i)
+  const late = compactionBudget.checkCompaction('compact')
+  assert.equal(late.action, 'allow', `第 ${i} 次压缩仍应放行`)
+  assert.equal(late.warning, true)
+}
+
+// 每轮只放一条 ask：checkStep 已提醒后同轮 checkCall 不重复，换回合后恢复
+const sharedAsk = new TurnBudget({
+  maxCallsPerTurn: 2,
+  hardMaxCallsPerTurn: 5,
+  maxStepsPerTurn: 2,
+  hardMaxStepsPerTurn: 10,
+  maxStepsPerSession: 100,
+  hardMaxStepsPerSession: 200,
+})
+sharedAsk.startTurn('shared', 1)
+sharedAsk.noteStep('shared', 1)
+assert.equal(sharedAsk.checkStep('shared').action, 'allow')
+sharedAsk.noteStep('shared', 2)
+assert.equal(sharedAsk.checkStep('shared').action, 'ask')
+assert.equal(sharedAsk.checkCall('shared').action, 'allow')
+assert.equal(sharedAsk.checkCall('shared').action, 'allow', '本轮已提醒过，调用提醒不再重复')
+sharedAsk.startTurn('shared', 2)
+assert.equal(sharedAsk.checkCall('shared').action, 'allow')
+assert.equal(sharedAsk.checkCall('shared').action, 'ask', '新回合恢复一条提醒')
+
+// 会话硬线可由用户「继续」恢复：90 deny → resume +30 → allow → 120 再 deny
+const resumeBudget = new TurnBudget({
+  maxStepsPerTurn: 100,
+  hardMaxStepsPerTurn: 200,
+  maxStepsPerSession: 60,
+  hardMaxStepsPerSession: 90,
+})
+assert.equal(resumeBudget.resumeByUser('resume-early').resumed, false, '未到硬线不生效')
+for (let turn = 1; turn <= 3; turn++) {
+  resumeBudget.startTurn('resume', turn)
+  for (let i = 1; i <= 30; i++) resumeBudget.noteStep('resume', (turn - 1) * 30 + i)
+  if (turn === 2) assert.equal(resumeBudget.checkStep('resume').action, 'ask', '第 60 步会话提醒')
+}
+assert.equal(resumeBudget.checkStep('resume').action, 'deny')
+const firstResume = resumeBudget.resumeByUser('resume')
+assert.equal(firstResume.resumed, true)
+assert.equal(firstResume.hardMaxStepsPerSession, 120)
+assert.equal(resumeBudget.checkStep('resume').action, 'allow')
+for (let i = 1; i <= 30; i++) resumeBudget.noteStep('resume', 90 + i)
+assert.equal(resumeBudget.checkStep('resume').action, 'deny', '恢复后到 120 步再次硬拒')
+assert.equal(resumeBudget.resumeByUser('resume').resumed, true, '可再次恢复')
+assert.equal(resumeBudget.checkStep('resume').action, 'allow')
 
 const catLint = lintCommand('cat ~/.dsh/profiles/web/cordis.patch.yml')
 assert.equal(catLint.hit, true)
@@ -1032,7 +1084,8 @@ for (let index = 1; index <= 79; index++) {
 const ask80 = await preExecute(gateExec, async () => ({ kind: 'allow' }))
 assert.equal(ask80.kind, 'ask')
 assert.match(ask80.reason, /提醒点/)
-assert.match(ask80.reason, /每 80 次/)
+assert.match(ask80.reason, /本轮 bash 80 次/)
+assert.match(ask80.reason, /已压缩 0 次/)
 for (let index = 81; index <= 159; index++) {
   assert.equal((await preExecute(gateExec, async () => ({ kind: 'allow' }))).kind, 'allow')
 }
@@ -1295,15 +1348,15 @@ assert.match(again.stdout, /无变化/)
 assert.equal(await readFile(patchFile, 'utf8'), firstText)
 assert.ok((await readdir(compactRoot)).filter(name => name.startsWith('cordis.patch.yml.bak.compaction-')).length === 1)
 // 缺字段：check 非零并点名 preset
-await writeFile(patchFile, firstText.replace(/^\s*thresholdRatio: 0\.08\n/m, ''))
+await writeFile(patchFile, firstText.replace(/^\s*thresholdRatio: 0\.20\n/m, ''))
 const missing = runCompaction(['check'])
 assert.equal(missing.status, 1)
 assert.match(missing.stdout, /FAIL: preset-minimal 缺少 thresholdRatio/)
 // 值不对：同样 FAIL
-await writeFile(patchFile, firstText.replace(/thresholdRatio: 0\.08/, 'thresholdRatio: 0.5'))
+await writeFile(patchFile, firstText.replace(/thresholdRatio: 0\.20/, 'thresholdRatio: 0.5'))
 const wrong = runCompaction(['check'])
 assert.equal(wrong.status, 1)
-assert.match(wrong.stdout, /thresholdRatio=0\.5，期望 0\.08/)
+assert.match(wrong.stdout, /thresholdRatio=0\.5，期望 0\.20/)
 // 缺整个 preset 覆盖：FAIL
 await writeFile(patchFile, '')
 const uncovered = runCompaction(['check'])
@@ -1729,18 +1782,64 @@ const sessionStepDeny = await verifyPre(rExec('session-step'), allow)
 assert.equal(sessionStepDeny.kind, 'deny')
 assert.match(sessionStepDeny.reason, /会话硬线/)
 assert.ok(!sessionStepDeny.reason.includes(HARD_LIMIT_DRAFT_MARKER), '会话硬线不得自动续跑')
+assert.match(sessionStepDeny.reason, /回复「继续」恢复 \+30 步/)
+// 只有 source.kind === 'user' 的「继续」生效；goal/team-message 与长句不解除
+const userMessage = (text, kind) => ({ type: 'user/message', data: { source: { kind }, content: [{ type: 'text', text }] } })
+await sessionEvent({ id: 'session-step' }, userMessage('继续', 'goal'))
+assert.equal((await verifyPre(rExec('session-step'), allow)).kind, 'deny', 'goal 消息不解除会话硬线')
+await sessionEvent({ id: 'session-step' }, userMessage('继续这个方向再查一下整个仓库的所有文档和代码', 'user'))
+assert.equal((await verifyPre(rExec('session-step'), allow)).kind, 'deny', '长句里带继续不解除')
+await sessionEvent({ id: 'session-step' }, userMessage('继续', 'user'))
+const resumedStepAsk = await verifyPre(rExec('session-step'), allow)
+assert.equal(resumedStepAsk.kind, 'ask', '恢复后先给本回合提醒')
+assert.match(resumedStepAsk.reason, /本轮 30 步/)
+assert.equal((await verifyPre(rExec('session-step'), allow)).kind, 'allow', '提醒后恢复放行')
 
-// 压缩门禁端到端：第 1 次提醒、第 2 次硬拒；硬拒不写自动「继续」标记
+// continueResume:false 时用户回复「继续」不解除会话硬线
+const resumeOffHandlers = new Map()
+const resumeOffCtx = {
+  on(type, fn) {
+    if (!resumeOffHandlers.has(type)) resumeOffHandlers.set(type, [])
+    resumeOffHandlers.get(type).push(fn)
+  },
+  logger: { warn() {}, info() {} },
+  get() { return undefined },
+}
+apply(resumeOffCtx, {
+  dir,
+  outputDir: join(dir, 'off-output'),
+  metricsDir: join(dir, 'off-metrics'),
+  cleanupEnabled: false,
+  docGuardEnabled: false,
+  stepBudget: {
+    continueResume: false,
+    maxStepsPerSession: 2,
+    hardMaxStepsPerSession: 3,
+    maxStepsPerTurn: 100,
+    hardMaxStepsPerTurn: 200,
+  },
+})
+const resumeOffEvent = resumeOffHandlers.get('session/event')[0]
+const resumeOffPre = resumeOffHandlers.get('tools/pre-execute')[0]
+await resumeOffEvent({ id: 'session-off' }, { type: 'turn/start', data: { turn: 1 } })
+for (let i = 1; i <= 3; i++) await resumeOffEvent({ id: 'session-off' }, { type: 'step/start', data: { step: i } })
+assert.equal((await resumeOffPre(rExec('session-off'), allow)).kind, 'deny')
+await resumeOffEvent({ id: 'session-off' }, userMessage('继续', 'user'))
+assert.equal((await resumeOffPre(rExec('session-off'), allow)).kind, 'deny', 'continueResume:false 时不恢复')
+
+// 压缩端到端：第 1/2 次都不拒绝；压缩次数并入步数提醒文案
 const compactSession = { id: 'session-compact', header: {}, snapshotEvents: () => [] }
 await sessionEvent(compactSession, { type: 'compaction/summary', data: { summary: [{ type: 'text', text: '第一次摘要' }] } })
+assert.equal((await verifyPre(rExec('session-compact'), allow)).kind, 'allow', '压缩 1 次后仍放行')
+await sessionEvent(compactSession, { type: 'compaction/summary', data: { summary: [{ type: 'text', text: '第二次摘要' }] } })
+assert.equal((await verifyPre(rExec('session-compact'), allow)).kind, 'allow', '压缩 2 次后仍放行')
+await sessionEvent({ id: 'session-compact' }, { type: 'turn/start', data: { turn: 1 } })
+for (let i = 1; i <= 30; i++) await sessionEvent({ id: 'session-compact' }, { type: 'step/start', data: { step: i } })
 const compactAskE2e = await verifyPre(rExec('session-compact'), allow)
 assert.equal(compactAskE2e.kind, 'ask')
-assert.match(compactAskE2e.reason, /已压缩 1 次/)
-await sessionEvent(compactSession, { type: 'compaction/summary', data: { summary: [{ type: 'text', text: '第二次摘要' }] } })
-const compactDenyE2e = await verifyPre(rExec('session-compact'), allow)
-assert.equal(compactDenyE2e.kind, 'deny')
-assert.match(compactDenyE2e.reason, /已压缩 2 次/)
-assert.ok(!compactDenyE2e.reason.includes(HARD_LIMIT_DRAFT_MARKER), '压缩硬线不得自动续跑')
+assert.match(compactAskE2e.reason, /本轮 30 步/)
+assert.match(compactAskE2e.reason, /已压缩 2 次/)
+assert.ok(!compactAskE2e.reason.includes(HARD_LIMIT_DRAFT_MARKER))
 
 // stepBudget.enabled=false 时步数/压缩门禁整体关闭
 const offHandlers = new Map()

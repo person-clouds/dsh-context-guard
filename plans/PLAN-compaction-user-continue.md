@@ -1,7 +1,7 @@
 ---
-implementation_status: not_started
+implementation_status: done
 created_at: 2026-11-23 13:13:09
-updated_at: 2026-11-23 13:42:00
+updated_at: 2026-11-23 13:49:00
 ---
 
 # PLAN：压缩不断服务、压缩后不连环压缩、步数提醒合并
@@ -70,3 +70,4 @@ updated_at: 2026-11-23 13:42:00
 
 - 2026-11-23 13:13 新建 v1：仅「压缩/会话硬线支持用户显式继续」。
 - 2026-11-23 13:42 重写 v2：合并用户三点要求（压缩不 deny、压缩后留足余量、提醒合并），依据 §事实 的会话实测；v1 的「继续恢复」并入本计划。
+- 2026-11-23 13:49 实施完成：`turn-budget.js`（压缩永不 deny / 每轮单 ask / `resumeByUser` / `summary`）、`index.js`（user/message 恢复、合并文案、warn 频率、deny 文案）、`apply-compaction.sh`（`0.20/0.03` 与 `--deep` 断言）、`test.mjs`（新增 6 组用例）、5 份文档同步；`npm test` ok。部署仍需用户在宿主 `apply` + 重启 `dsh web`。

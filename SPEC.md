@@ -20,7 +20,7 @@ status: current
 2. 去重：同 session + tool + args 在 10 分钟内结果相同只回指针，变化只回行级 diff；
 3. 单轮调用门禁：`maxCallsPerTurn`（默认 80，即第 80 次）返回一次 `ask`，达到 `hardMaxCallsPerTurn`（默认 160）拒绝；
 4. 单轮累计输出门禁：超过 `maxTurnOutputChars`（默认 40000）后，后续超 800 字符结果只回摘要 + 路径；
-4.1 步数门禁：按 `step/start` 计步，单回合 30 提醒 / 40 拒绝、会话累计 60 提醒 / 90 拒绝；压缩 1 次提醒 / 2 次拒绝；`ask` 每回合、每会话仅一次；无 `step/start` 时按工具调用近似计步；
+4.1 步数门禁：按 `step/start` 计步，单回合 30 提醒 / 40 拒绝、会话累计 60 提醒 / 90 拒绝；压缩只累计次数（1 次起提醒、2 次起仅 warning，永不拒绝）；每轮最多一条 `ask`（与调用提醒合并，汇总本轮步数 / 会话步数 / bash 调用 / 压缩次数），会话步数提醒仅一次；会话硬线可由 `source.kind=user` 的「继续」恢复 +30 步（`continueResume: false` 可关）；无 `step/start` 时按工具调用近似计步；
 5. 命令形态拦截：整文件 `cat`、无排除递归搜索、裸 `curl` API 默认 `deny`，可切 `ask`；替代命令与系统提示按当前工具面渲染文件工具（dsh-ops 的 `ops_*` 或官方 `read`/`grep`/`glob`）；
 6. 风险命令确认；`rm` 白名单覆盖 `/tmp`、`/var/tmp`、`$TMPDIR`/`${TMPDIR}`、`~/opt`（含实际路径）下逐个列出的具体路径，不放行目录本身或通配；用户可把已解析的风险命令保存为精确命令（`scope: command` 或卡片「仅记住这条完整命令」只落规范化哈希）、构建产物清理类（含产物目录内 `rm` 尾部通配与 `find ... -delete`）、链接主机窄规则（URL 先剥尾部 `,.;` 与未配对 `)`，主机经 `isValidHost` 校验），或按 cwd 的 `.tmp*` 临时清理窄规则（`temp-rm`，只在该 cwd、只对简单 `rm` 的 `.tmp*` 目标生效；`/tmp` 仍由内置临时根直接放行），后续同类命令自动放行（询问与落库范围按有效白名单——配置/内置加已保存 host 规则——收窄）；压缩前后写 `STATUS.md`、指标统计、按保留期与配额清磁盘。
 7. 压缩阈值配置自检：`scripts/apply-compaction.sh` 校验并在 DSH 升级后重放四个内置 preset 的 `compaction-basic` 阈值（`thresholdRatio`/`retainRatio`/`headroomTokens`），块与安装包不一致时报 FAIL。
