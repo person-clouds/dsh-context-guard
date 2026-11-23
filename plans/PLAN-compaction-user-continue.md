@@ -6,6 +6,8 @@ updated_at: 2026-11-23 13:49:00
 
 # PLAN：压缩不断服务、压缩后不连环压缩、步数提醒合并
 
+> 压缩口径综合见 [PLAN-ai-flow-six.md](/home/zh/www/doc/plans/PLAN-ai-flow-six.md) R3：压缩只提醒、不作拒绝依据，0.20/0.03 阈值保留。
+
 ## 目标
 
 1. **压缩永不 deny**：`compaction/summary` 之后工具始终可用，最多留 1 条提醒；限制只做辅助。
