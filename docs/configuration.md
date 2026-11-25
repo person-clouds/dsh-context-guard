@@ -44,6 +44,7 @@ dsh --profile web --dump-config | grep -E "context-guard|maxOutputChars|tool-res
           hardMaxStepsPerTurn: 40        # 单回合硬拒绝
           maxStepsPerSession: 60         # 会话累计提醒
           hardMaxStepsPerSession: 90     # 会话累计硬拒绝，可回复「继续」+30
+          # 本机（web profile）覆盖为 60/90/120/200，见 doc/plans/PLAN-token-budget-guard-and-agent-rules.md
           maxCompactions: 1              # 压缩 1 次后仅 warning
           hardMaxCompactions: 2          # 压缩 2 次后仅 warning，从不拒绝
           continueResume: true           # 允许用户回复「继续」恢复会话硬线
