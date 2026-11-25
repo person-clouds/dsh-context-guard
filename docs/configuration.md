@@ -45,7 +45,7 @@ dsh --profile web --dump-config | grep -E "context-guard|maxOutputChars|tool-res
           maxStepsPerSession: 60         # 统一阶梯：会话步数每满该值提醒一次，是唯一提醒来源
           hardMaxStepsPerSession: 90     # 会话累计硬拒绝，可回复「继续」+30
           stepReminderLadder: true       # 默认开启统一阶梯；false 回退旧三套提醒（回合/会话/每 N 次调用）
-          # 本机（web profile）覆盖为 60/90/60/200，见 doc/plans/PLAN-token-budget-guard-and-agent-rules.md
+          # 本机（web profile）覆盖为 60/90/60/120，见 doc/archive/plans/PLAN-token-budget-guard-and-agent-rules.md
           maxCompactions: 1              # 压缩 1 次后仅 warning
           hardMaxCompactions: 2          # 压缩 2 次后仅 warning，从不拒绝
           continueResume: true           # 允许用户回复「继续」恢复会话硬线
