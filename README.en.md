@@ -253,10 +253,11 @@ bash dsh-context-guard/scripts/apply-compaction.sh apply     # back up, rewrite 
         exhaustedOutputChars: 800
         stepBudget:                      # step & compaction reminders; enabled: false turns them off
           enabled: true
-          maxStepsPerTurn: 30            # per-turn reminder (merged with the call reminder)
-          hardMaxStepsPerTurn: 40        # per-turn hard deny
-          maxStepsPerSession: 60         # session-cumulative reminder
+          maxStepsPerTurn: 30            # legacy: per-turn reminder (not emitted alone in ladder mode)
+          hardMaxStepsPerTurn: 40        # per-turn hard deny (still enforced in ladder mode)
+          maxStepsPerSession: 60         # unified ladder: one reminder per N session steps (the only reminder source)
           hardMaxStepsPerSession: 90     # session-cumulative hard deny; reply "continue" for +30
+          stepReminderLadder: true       # default on; false restores the legacy turn/session/every-N-calls reminders
           maxCompactions: 1              # warning only after the 1st compaction
           hardMaxCompactions: 2          # warning only from the 2nd compaction; never denied
           continueResume: true           # allow a user "continue" to extend the session hard line

@@ -335,6 +335,7 @@ function guardConfig(config) {
       hardMaxStepsPerSession: Number(config.stepBudget?.hardMaxStepsPerSession) || DEFAULT_HARD_MAX_STEPS_PER_SESSION,
       maxCompactions: Number(config.stepBudget?.maxCompactions) || DEFAULT_MAX_COMPACTIONS,
       hardMaxCompactions: Number(config.stepBudget?.hardMaxCompactions) || DEFAULT_HARD_MAX_COMPACTIONS,
+      stepReminderLadder: config.stepBudget?.stepReminderLadder !== false,
       continueResume: config.stepBudget?.continueResume !== false,
       continueGraceSessionSteps: Number(config.stepBudget?.continueGraceSessionSteps)
         || DEFAULT_CONTINUE_GRACE_SESSION_STEPS,
@@ -506,9 +507,18 @@ function dispatchDuplicateDecision(key, firstAt) {
 }
 
 /** 每轮最多一条的合并提醒：把会话步数 / 本轮步数 / 命令调用 / 压缩次数放在同一张卡片里。 */
-function budgetAskDecision(summary, scope) {
+function ladderScopeZh(scope) {
+  if (scope === 'ladder') return '本会话步数达提醒阶梯'
+  if (scope === 'session') return '本会话累计步数已达提醒点'
+  if (scope === 'turn') return '本轮步数已达提醒点'
+  return '本轮命令调用已达提醒点'
+}
+
+function budgetAskDecision(summary, scope, level = 0) {
   const approx = summary.approx ? '（近似计步）' : ''
-  const scopeZh = scope === 'session' ? '本会话累计步数已达提醒点' : scope === 'turn' ? '本轮步数已达提醒点' : '本轮命令调用已达提醒点'
+  const scopeZh = level > 0
+    ? `${ladderScopeZh('ladder')}第 ${level} 级（每 ${summary.maxStepsPerSession} 步一级）`
+    : ladderScopeZh(scope)
   const continueHint = summary.graceSteps > 0 ? `；本轮已由「继续」恢复 ${summary.graceSteps} 步` : ''
   return {
     kind: 'ask',
@@ -970,6 +980,7 @@ export function apply(ctx, config = {}) {
     maxCompactions: cfg.stepBudget.maxCompactions,
     hardMaxCompactions: cfg.stepBudget.hardMaxCompactions,
     continueGraceSessionSteps: cfg.stepBudget.continueGraceSessionSteps,
+    stepReminderLadder: cfg.stepBudget.stepReminderLadder,
     budgetFor: sessionId => {
       const title = titleCache.read(sessionId)
       return title === undefined ? null : matchBudget(budgetRules, title)
@@ -1061,7 +1072,9 @@ export function apply(ctx, config = {}) {
         ctx.logger?.info?.('context-guard: %s步数硬线拦截: %s', step.scope === 'session' ? '会话' : '回合', budgetSession)
         return stepDenyDecision(step, cfg.stepBudget)
       }
-      if (step.action === 'ask') asks.push(budgetAskDecision(turnBudget.summary(budgetSession), step.scope))
+      if (step.action === 'ask') {
+        asks.push(budgetAskDecision(turnBudget.summary(budgetSession), step.scope, step.ladderLevel || 0))
+      }
     }
 
     // 派单去重：只有 prompt 声明了「快照：<sha>」才参与，普通子任务不受影响。

@@ -7,7 +7,7 @@ import vm from 'node:vm'
 import { createRiskRuleHandler, createAllowHandler, catastrophicReason, name, apply, docGuardDecision, parseGitCommitCommand, detectFileTools, commandGuidanceText } from './index.js'
 import { budgetFor, classifyCommand, renderBounded } from './lib/budget.js'
 import { lintCommand, lintDecision } from './lib/command-lint.js'
-import { TurnBudget } from './lib/turn-budget.js'
+import { TurnBudget, planStepLadder } from './lib/turn-budget.js'
 import { DedupCache } from './lib/dedup.js'
 import { cleanupOutputs } from './lib/cleanup.js'
 import { analyzeCommand, normalizeCommand, DEFAULT_ALLOW_HOSTS, extractUrls, hostOf } from './lib/risk.js'
@@ -46,7 +46,7 @@ assert.ok(bounded.endsWith('F'))
 
 // 单轮调用与累计输出门禁
 const turnWarnings = []
-const turnBudget = new TurnBudget({ maxCallsPerTurn: 80, hardMaxCallsPerTurn: 160, maxTurnOutputChars: 100, logger: { warn(...args) { turnWarnings.push(args) } } })
+const turnBudget = new TurnBudget({ stepReminderLadder: false, maxCallsPerTurn: 80, hardMaxCallsPerTurn: 160, maxTurnOutputChars: 100, logger: { warn(...args) { turnWarnings.push(args) } } })
 turnBudget.startTurn('turn-test', 1)
 turnBudget.noteStep('turn-test', 7)
 for (let index = 1; index <= 79; index++) assert.equal(turnBudget.checkCall('turn-test').action, 'allow')
@@ -73,7 +73,7 @@ assert.equal(fallbackBudget.checkCall('fallback-session').action, 'allow')
 assert.equal(turnWarnings.length, 1)
 
 // 步数/压缩门禁：回合 30/40、会话 60/90、压缩 1/2；提醒只报一次，硬线顺序为先回合后会话
-const stepBudget = new TurnBudget({ logger: { warn() {} } })
+const stepBudget = new TurnBudget({ stepReminderLadder: false, logger: { warn() {} } })
 stepBudget.startTurn('steps', 1)
 for (let i = 1; i <= 29; i++) {
   stepBudget.noteStep('steps', i)
@@ -130,7 +130,7 @@ assert.equal(unitSessionDeny90.action, 'deny')
 assert.equal(unitSessionDeny90.scope, 'session')
 assert.equal(unitSessionDeny90.hardMaxStepsPerSession, 90)
 // 无 step/start 事件时退化为按工具调用计步
-const fallbackSteps = new TurnBudget({ logger: { warn() {} } })
+const fallbackSteps = new TurnBudget({ stepReminderLadder: false, logger: { warn() {} } })
 for (let i = 1; i <= 29; i++) assert.equal(fallbackSteps.checkStep('fallback-steps').action, 'allow')
 const fallbackAsk = fallbackSteps.checkStep('fallback-steps')
 assert.equal(fallbackAsk.action, 'ask')
@@ -160,6 +160,7 @@ for (let i = 3; i <= 10; i++) {
 
 // 每轮只放一条 ask：checkStep 已提醒后同轮 checkCall 不重复，换回合后恢复
 const sharedAsk = new TurnBudget({
+  stepReminderLadder: false,
   maxCallsPerTurn: 2,
   hardMaxCallsPerTurn: 5,
   maxStepsPerTurn: 2,
@@ -180,6 +181,7 @@ assert.equal(sharedAsk.checkCall('shared').action, 'ask', '新回合恢复一条
 
 // 会话硬线可由用户「继续」恢复：90 deny → resume +30 → allow → 120 再 deny
 const resumeBudget = new TurnBudget({
+  stepReminderLadder: false,
   maxStepsPerTurn: 100,
   hardMaxStepsPerTurn: 200,
   maxStepsPerSession: 60,
@@ -200,6 +202,37 @@ for (let i = 1; i <= 30; i++) resumeBudget.noteStep('resume', 90 + i)
 assert.equal(resumeBudget.checkStep('resume').action, 'deny', '恢复后到 120 步再次硬拒')
 assert.equal(resumeBudget.resumeByUser('resume').resumed, true, '可再次恢复')
 assert.equal(resumeBudget.checkStep('resume').action, 'allow')
+
+// 统一提醒阶梯（默认）：会话步数每越过 maxStepsPerSession 倍数提醒一次，每轮最多一条；
+// 调用提醒已删除，回合硬拒保留。
+assert.equal(planStepLadder({ sessionSteps: 59, maxStepsPerSession: 60 }), null)
+assert.equal(planStepLadder({ sessionSteps: 60, maxStepsPerSession: 60 }).level, 1)
+assert.equal(planStepLadder({ sessionSteps: 60, maxStepsPerSession: 60, crossed: 1 }), null, '同一级不重复')
+assert.equal(planStepLadder({ sessionSteps: 125, maxStepsPerSession: 60, crossed: 1 }).level, 2, '跨级合并成一条')
+const ladderBudget = new TurnBudget({
+  maxStepsPerTurn: 30, hardMaxStepsPerTurn: 90, maxStepsPerSession: 60, hardMaxStepsPerSession: 200,
+  logger: { warn() {} },
+})
+ladderBudget.startTurn('ladder', 1)
+const ladderAsks = []
+let ladderCallAsks = 0
+for (let i = 1; i <= 200; i++) {
+  if (i > 1 && (i - 1) % 40 === 0) ladderBudget.startTurn('ladder', Math.floor((i - 1) / 40) + 1)
+  ladderBudget.noteStep('ladder', i)
+  const step = ladderBudget.checkStep('ladder')
+  if (step.action === 'ask') ladderAsks.push([i, step.ladderLevel])
+  if (ladderBudget.checkCall('ladder').action === 'ask') ladderCallAsks++
+}
+assert.deepEqual(ladderAsks, [[60, 1], [120, 2], [180, 3]], '60/120/180 各一条')
+assert.equal(ladderCallAsks, 0, '调用提醒已删除，不再单独出现')
+assert.equal(ladderBudget.checkStep('ladder').action, 'deny', '会话硬线保留')
+assert.equal(ladderBudget.checkStep('ladder').scope, 'session')
+// 回合硬拒保留：单轮过 90 步仍拒
+const ladderTurn = new TurnBudget({ maxStepsPerTurn: 30, hardMaxStepsPerTurn: 90, logger: { warn() {} } })
+ladderTurn.startTurn('lt', 1)
+for (let i = 1; i <= 90; i++) ladderTurn.noteStep('lt', i)
+assert.equal(ladderTurn.checkStep('lt').action, 'deny', '回合硬拒保留')
+assert.equal(ladderTurn.checkStep('lt').scope, 'turn')
 
 const catLint = lintCommand('cat ~/.dsh/profiles/web/cordis.patch.yml')
 assert.equal(catLint.hit, true)
@@ -227,7 +260,7 @@ assert.equal(lintCommand('curl -s http://127.0.0.1:3080/api/sessions | jq \'{id}
 assert.equal(lintCommand('curl -o /tmp/out.json http://127.0.0.1:3080/api/sessions').hit, false)
 
 /** 一键放行：只挂单个 sessionId；过期即回收；`checkCall` 有放行时「每 80 次提醒、不硬拒」。 */
-const allowBudget = new TurnBudget({ logger: { warn() {} } })
+const allowBudget = new TurnBudget({ stepReminderLadder: false, logger: { warn() {} } })
 allowBudget.startTurn('allow-a', 1)
 assert.deepEqual(allowBudget.allowFor('allow-a', { steps: true, risk: true }), { steps: true, risk: true, expiresAt: null, active: true })
 for (let i = 1; i <= 200; i++) {
@@ -291,7 +324,7 @@ assert.equal(isoBudget.checkCall('iso-b').action, 'deny', '未放行的 B 第 16
 assert.deepEqual(allowBudget.allowState(undefined), { steps: false, risk: false, expiresAt: null, active: false })
 assert.deepEqual(allowBudget.allowState(''), { steps: false, risk: false, expiresAt: null, active: false })
 assert.deepEqual(allowBudget.allowFor('', { steps: true }), { steps: false, risk: false, expiresAt: null, active: false, reason: 'session-required' })
-const shared = new TurnBudget({ logger: { warn() {} } })
+const shared = new TurnBudget({ stepReminderLadder: false, logger: { warn() {} } })
 shared.allowFor('', { steps: true })
 shared.allowFor(undefined, { risk: true })
 assert.equal(shared.allowState('unknown-session').active, false)
@@ -348,7 +381,9 @@ const ctx = {
   logger: { warn() {} },
   systemPrompt: { section(section) { commandGuidance = section; return () => {} } },
 }
-apply(ctx, { dir, outputDir, metricsDir: join(dir, 'metrics'), thresholdChars: 3000, cleanupEnabled: false })
+// 主实例走旧口径（stepReminderLadder: false）：本文件的调用提醒 / 回合门禁用例覆盖旧三套提醒；
+// 统一阶梯由 ladderBudget / planStepLadder 用例单独覆盖（见 PLAN-token-budget-guard-and-agent-rules.md）。
+apply(ctx, { dir, outputDir, metricsDir: join(dir, 'metrics'), thresholdChars: 3000, cleanupEnabled: false, stepBudget: { stepReminderLadder: false } })
 assert.equal(name, 'dsh-context-guard')
 assert.equal(commandGuidance.name, 'context-guard:command-guidance')
 assert.equal(typeof commandGuidance.text, 'function')
@@ -1845,7 +1880,7 @@ expiring.now = () => 20_020
 assert.equal(expiring.claim('s3', 'abc1234').duplicate, false)
 
 // TurnBudget：按会话覆盖上限
-const verifyBudget = new TurnBudget({ budgetFor: sessionId => (sessionId === 'v' ? { maxCallsPerTurn: 25, hardMaxCallsPerTurn: 40, maxTurnOutputChars: 20000 } : null) })
+const verifyBudget = new TurnBudget({ stepReminderLadder: false, budgetFor: sessionId => (sessionId === 'v' ? { maxCallsPerTurn: 25, hardMaxCallsPerTurn: 40, maxTurnOutputChars: 20000 } : null) })
 verifyBudget.startTurn('v')
 let lastCheck = null
 for (let i = 1; i <= 25; i++) lastCheck = verifyBudget.checkCall('v')
@@ -1874,7 +1909,7 @@ const verifyCtx = {
     return undefined
   },
 }
-apply(verifyCtx, { dir, outputDir: join(dir, 'verify-output'), metricsDir: join(dir, 'verify-metrics'), cleanupEnabled: false, docGuardEnabled: false })
+apply(verifyCtx, { dir, outputDir: join(dir, 'verify-output'), metricsDir: join(dir, 'verify-metrics'), cleanupEnabled: false, docGuardEnabled: false, stepBudget: { stepReminderLadder: false } })
 const verifyPre = verifyHandlers.get('tools/pre-execute')[0]
 let verifyCallSeq = 0
 const vExec = (name, args = {}) => ({ name, callId: `call-v-${name}-${++verifyCallSeq}`, arguments: args, agent: { id: 'session-v', session: { id: 'session-v' } } })
