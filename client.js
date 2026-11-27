@@ -347,15 +347,17 @@ window.__ModuleLoader__.load({
      * 风险总开关 riskCheckEnabled=false 时，风险按钮置灰并标注「已关闭（配置）」。
      */
     function AllowPanel(props) {
-      const sessionId = props?.session?.id
+      // 宿主给 `conversation.input.dock`（list 型、scope=session）的组装 props 只有 `sessionId`/`input`，
+      // 不含 `session` 快照；以前只读 `props.session.id` 会永远拿不到会话，面板整块不渲染。
+      const sessionId = props?.sessionId || props?.session?.id || props?.input?.sessionId
       // 宿主若未提供 hooks（测试桩/精简运行面），面板直接不渲染，不能打断同槽位的其它组件。
-      if (typeof React.useState !== 'function' || typeof React.useEffect !== 'function') return null
+      // 该判断必须在任何 Hook 之前，否则空会话与有会话两态 Hook 数量不一致。
+      if (!sessionId || typeof React.useState !== 'function' || typeof React.useEffect !== 'function') return null
       const [allow, setAllow] = React.useState(null)
       const [riskCheckEnabled, setRiskCheckEnabled] = React.useState(true)
       const [hours, setHours] = React.useState(8)
       const [busy, setBusy] = React.useState(false)
       React.useEffect(() => {
-        if (!sessionId) return undefined
         let live = true
         postAllow(sessionId, { action: 'query' })
           .then(body => {
@@ -381,7 +383,6 @@ window.__ModuleLoader__.load({
           setBusy(false)
         }
       }
-      if (!sessionId) return null
       const buttonStyle = (disabled) => 'padding:5px 10px;border-radius:6px;border:1px solid ' +
         (disabled ? '#374151' : '#2563eb') + ';background:' + (disabled ? 'transparent' : '#2563eb') +
         ';color:' + (disabled ? '#6b7280' : '#fff') + ';font-size:12px;cursor:' + (disabled ? 'not-allowed' : 'pointer')

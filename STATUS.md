@@ -1,9 +1,17 @@
 # STATUS — dsh-context-guard
 
 - 版本：`0.6.0`（**已发布**：npm `dist-tags.latest` = `0.6.0`、GitHub Release `v0.6.0`（资产 `dsh-context-guard.tgz` 91018 字节，`latest/download` 200）、市场条目描述 PR [#18300](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin/pull/18300) 待合）。`0.5.0` 只有 npm；`v0.5.0` tag 已补推，无单独 Release
-- 更新时间：2026-11-24
+- 更新时间：2026-11-27
 - 一句话：DSH 工具输出预算/落盘、去重、单轮调用/输出门禁、硬上限后 Web 自动填入「继续」、命令形态拦截、风险确认与窄规则自动放行（含按 cwd 的 `.tmp*` 清理与命令范围）、内置放行默认值外置、只读诊断、压缩归档与指标。
 - 位置：`dsh-context-guard/`；web profile 已按 link 加载并完成「始终允许」实机验证，superagent profile 待重启后核对。
+
+## 2026-11-27 一键放行面板从未显示（修复）
+
+- 现象：Web GUI 输入框上方从没出现过「context-guard 一键放行」面板，四个按钮与「立即收回」都不可见。
+- 根因：`AllowPanel` 用 `props?.session?.id` 取会话，但宿主给 `conversation.input.dock`（list 型、scope=session）的组装 props 只有 `sessionId` / `input`（见 `@deepseek-ai/dsh-client-ui-renderer` 的 `cachedSlotInject`、`materializeStandardBinding` 与 conversation `contract/slots.d.ts` 的 `ComposerChainProps`），`sessionId` 恒为 `undefined`，组件在 `if (!sessionId) return null` 处整块不渲染。另有一处隐藏缺陷：该判断写在 4 个 `useState` 之后，空会话/有会话两态 Hook 数量不一致。
+- [x] `client.js`：`sessionId` 改为 `props.sessionId || props.session?.id || props.input?.sessionId`；`return null` 提到全部 Hook 之前；`useEffect` 内的 `if (!sessionId)` 随之删除。
+- [x] `test.mjs`：新增面板挂载回归（宿主真实 props 只有 `sessionId`/`input`；断言渲染出「本会话放行步数」、挂载即 `query` 一次本会话放行态、`riskCheckEnabled: false` 时显示「风险检查已关闭」、空会话不渲染且不调用 Hook）；`npm test` ok。
+- [ ] 待验证：Web GUI 刷新后输入框上方出现面板；点「本会话放行步数」后 `POST /api/context-guard-allow {"action":"query","sessionId":"<当前会话>"}` 返回 `steps: true`。本机 web profile 当前 `riskCheckEnabled: false`，风险按钮会显示「风险检查已关闭」；要可点需把该配置改回 `true`。
 
 ## 2026-11-24 一键放行 + 风险总开关（0.6.0）
 

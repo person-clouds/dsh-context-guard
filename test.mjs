@@ -1839,6 +1839,67 @@ assert.equal(docAllowed, null)
     assert.equal(calls, 0)
     assert.match(mounted.notices.at(-1).textContent, /「始终允许」失败/)
   }
+
+  // 一键放行面板必须真的挂载：宿主给 dock 槽位的 props 只有 sessionId/input（没有 session 快照）
+  function mountAllowPanel({ props, fetchImpl, riskCheckEnabled = true }) {
+    const registered3 = {}
+    let plugin3
+    const allowCalls = []
+    const doc = makeFakeDocument()
+    const appendChild = doc.body.appendChild
+    doc.body.appendChild = (node) => { appendChild(node); return node }
+    const hooks = []
+    const states = []
+    let slot = 0
+    const ReactAllow = {
+      // 槽位下标跨重渲染复用（模拟 React 的 hook 槽位），重挂一次就能看到 setState 后的一帧
+      useState(init) { const index = slot++; hooks.push('useState'); if (states[index] === undefined) states[index] = init; return [states[index], value => { states[index] = value }] },
+      useEffect(fn) { slot++; hooks.push('useEffect'); fn() },
+      useRef: (value) => ({ current: value }),
+      createElement: (type, props2, ...children) => ({ type, props: props2, children }),
+      Fragment: 'fragment',
+    }
+    const loader = { __ModuleLoader__: { load: (m) => { plugin3 = m.factory((id) => id === 'react' ? ReactAllow : undefined) } } }
+    const fetch = fetchImpl || (async (url, options) => {
+      allowCalls.push({ url, body: JSON.parse(options.body) })
+      return { ok: true, status: 200, json: async () => ({ ok: true, allow: { steps: false, risk: false, expiresAt: null, active: false }, oneClickAllow: { enabled: true, defaultHours: 8, riskCheckEnabled } }) }
+    })
+    vm.runInNewContext(clientSource, {
+      window: loader, console, fetch, navigator: { language: 'zh-CN' },
+      document: doc, setTimeout, clearTimeout, AbortController,
+    })
+    plugin3.apply({
+      sessions: { binding: () => null },
+      slots: { inject(name, fn) { const next = fn(); registered3[next.id || name] = next }, register(opts, Component) { return { ...opts, Component } } },
+    })
+    const seat = registered3['context-guard-allow']
+    assert.equal(seat?.id, 'context-guard-allow', '一键放行面板要注册到 conversation.input.dock')
+    const tree = seat.Component(props)
+    // 重渲染入口：模拟 React 换帧时 Hook 槽位从 0 重新走
+    return { tree, allowCalls, hooks, doc, reseat: (props2) => { slot = 0; return seat.Component(props2) }, props }
+  }
+  const textOf = (node) => typeof node === 'string'
+    ? node
+    : (node.children || []).filter(child => child !== null && child !== undefined).map(textOf).join(' ')
+  // 宿主真实 props：只有 sessionId + input；以前读 props.session.id 会整块不渲染
+  const mountedAllow = mountAllowPanel({ props: { sessionId: 'session-allow', input: {} } })
+  assert.ok(mountedAllow.tree && mountedAllow.tree.type === 'div', '有会话时必须渲染放行面板')
+  assert.match(textOf(mountedAllow.tree), /一键放行/)
+  assert.match(textOf(mountedAllow.tree), /本会话放行步数/)
+  assert.deepEqual(mountedAllow.allowCalls.map(call => call.body), [{ action: 'query', sessionId: 'session-allow' }], '挂载即查一次本会话放行态')
+  // 风险总开关关闭时按钮置灰并换文案（host 的 oneClickAllow.riskCheckEnabled）
+  const greyPanel = mountAllowPanel({ props: { sessionId: 'session-allow', input: {} }, riskCheckEnabled: false })
+  // 查询结果落在 setState 上：真实环境靠 React 重渲染，这里用「各 useState 槽位共享状态」模拟，需重挂一次
+  await new Promise(resolve => setImmediate(resolve))
+  const greyTree = greyPanel.reseat(greyPanel.props)
+  const greyText = textOf(greyTree)
+  assert.match(greyText, /风险检查已关闭/)
+  assert.doesNotMatch(greyText, /一键放行风险/)
+  // 无会话：不渲染，且不调用任何 Hook（空会话与有会话 Hook 数量必须稳定）
+  const emptyPanel = mountAllowPanel({ props: {} })
+  assert.equal(emptyPanel.tree, null)
+  assert.deepEqual(emptyPanel.hooks, [])
+  assert.equal(emptyPanel.allowCalls.length, 0)
 }
 
 // 核验态：预算规则编译、标题匹配、快照指纹、派单去重
