@@ -399,34 +399,38 @@ window.__ModuleLoader__.load({
         },
         style: 'width:56px;padding:4px 6px;border-radius:6px;border:1px solid #374151;background:#0b1220;color:#f9fafb;font-size:12px',
       })
+      // 用数组承载分组，绝不把 `React.Fragment` 交给构建器当元素类型：DSH Web 客户端以 react/jsx-runtime
+      // 编译 JSX，`React.Fragment` 出的是「查看器」未绑定的 getter，做元素类型会抛
+      // "reading 'Fragment'"，槽位边界把整条面板吞掉（控制台 "slot entry crashed in 'conversation.input.dock'"）。
+      const idleControls = [
+        React.createElement('button', {
+          type: 'button',
+          disabled: busy,
+          onClick: () => run({ action: 'allow', scope: 'steps' }, '步数限制已放行（本会话）'),
+          style: buttonStyle(busy),
+        }, '本会话放行步数'),
+        hoursInput,
+        React.createElement('button', {
+          type: 'button',
+          disabled: busy,
+          onClick: () => run({ action: 'allow', scope: 'steps', ttlMs: hours * 3600 * 1000 }, '步数限制已放行 ' + hours + ' 小时'),
+          style: buttonStyle(busy),
+        }, '放行步数'),
+        React.createElement('button', {
+          type: 'button',
+          disabled: busy || !riskCheckEnabled,
+          title: riskCheckEnabled ? '灾难级命令（rm -rf /、dd、mkfs 等）仍会询问' : '配置 riskCheckEnabled: false，风险检查已整体关闭',
+          onClick: () => run({ action: 'allow', scope: 'risk' }, '风险警告已放行（本会话），灾难级命令仍会询问'),
+          style: buttonStyle(busy || !riskCheckEnabled),
+        }, riskCheckEnabled ? '一键放行风险' : '风险检查已关闭'),
+      ]
       return React.createElement('div', {
         style: 'display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin:0 0 6px;padding:6px 10px;border:1px solid #374151;border-radius:8px;background:rgba(17,24,39,.85);color:#e5e7eb;font-size:12px',
       },
         React.createElement('span', { style: 'font-weight:600' }, 'context-guard 一键放行'),
         allow && allow.active
           ? React.createElement('span', { style: 'color:#a7f3d0' }, allowLabel(allow))
-          : React.createElement(React.Fragment, null,
-            React.createElement('button', {
-              type: 'button',
-              disabled: busy,
-              onClick: () => run({ action: 'allow', scope: 'steps' }, '步数限制已放行（本会话）'),
-              style: buttonStyle(busy),
-            }, '本会话放行步数'),
-            hoursInput,
-            React.createElement('button', {
-              type: 'button',
-              disabled: busy,
-              onClick: () => run({ action: 'allow', scope: 'steps', ttlMs: hours * 3600 * 1000 }, '步数限制已放行 ' + hours + ' 小时'),
-              style: buttonStyle(busy),
-            }, '放行步数'),
-            React.createElement('button', {
-              type: 'button',
-              disabled: busy || !riskCheckEnabled,
-              title: riskCheckEnabled ? '灾难级命令（rm -rf /、dd、mkfs 等）仍会询问' : '配置 riskCheckEnabled: false，风险检查已整体关闭',
-              onClick: () => run({ action: 'allow', scope: 'risk' }, '风险警告已放行（本会话），灾难级命令仍会询问'),
-              style: buttonStyle(busy || !riskCheckEnabled),
-            }, riskCheckEnabled ? '一键放行风险' : '风险检查已关闭')
-          ),
+          : idleControls,
         allow && allow.active
           ? React.createElement('button', {
             type: 'button',

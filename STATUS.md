@@ -9,8 +9,10 @@
 
 - 现象：Web GUI 输入框上方从没出现过「context-guard 一键放行」面板，四个按钮与「立即收回」都不可见。
 - 根因：`AllowPanel` 用 `props?.session?.id` 取会话，但宿主给 `conversation.input.dock`（list 型、scope=session）的组装 props 只有 `sessionId` / `input`（见 `@deepseek-ai/dsh-client-ui-renderer` 的 `cachedSlotInject`、`materializeStandardBinding` 与 conversation `contract/slots.d.ts` 的 `ComposerChainProps`），`sessionId` 恒为 `undefined`，组件在 `if (!sessionId) return null` 处整块不渲染。另有一处隐藏缺陷：该判断写在 4 个 `useState` 之后，空会话/有会话两态 Hook 数量不一致。
+- 根因二（重启后仍不显示的主因）：面板用 `React.createElement(React.Fragment, null, …)` 给按钮分组。本仓 `package.json` 没有 `react` 依赖，客户端插件由宿主以 **react/jsx-runtime** 编译，`require('react')` 拿到的是查看器（viewer）对象，`React.Fragment` 是**未绑定的 getter**，当元素类型用即抛 `Cannot read properties of undefined (reading 'Fragment')`；该异常落在 `conversation.input.dock` 的 `SlotErrorBoundary` 里被吞掉，只留一个空的 `<div data-slot-error="conversation.input.dock">`，所以服务端 `/api/context-guard-allow` 正常、刷新/重启都不生效。
 - [x] `client.js`：`sessionId` 改为 `props.sessionId || props.session?.id || props.input?.sessionId`；`return null` 提到全部 Hook 之前；`useEffect` 内的 `if (!sessionId)` 随之删除。
-- [x] `test.mjs`：新增面板挂载回归（宿主真实 props 只有 `sessionId`/`input`；断言渲染出「本会话放行步数」、挂载即 `query` 一次本会话放行态、`riskCheckEnabled: false` 时显示「风险检查已关闭」、空会话不渲染且不调用 Hook）；`npm test` ok。
+- [x] `client.js`：删掉 `React.Fragment`，按钮分组改用**数组**（`idleControls`）作为子元素，不引入任何未绑定的 React 成员。
+- [x] `test.mjs`：新增面板挂载回归（宿主真实 props 只有 `sessionId`/`input`；断言渲染出「本会话放行步数」、挂载即 `query` 一次本会话放行态、`riskCheckEnabled: false` 时显示「风险检查已关闭」、空会话不渲染且不调用 Hook）；桩 `React` 的 `Fragment` 改成 **getter 抛错**，复刻线上 jsx-runtime 事实——回退任一根因修复该用例都会失败（曾以旧代码验证会精确复现 `reading 'Fragment'`）；`npm test` ok。
 - [ ] 待验证：Web GUI 刷新后输入框上方出现面板；点「本会话放行步数」后 `POST /api/context-guard-allow {"action":"query","sessionId":"<当前会话>"}` 返回 `steps: true`。本机 web profile 当前 `riskCheckEnabled: false`，风险按钮会显示「风险检查已关闭」；要可点需把该配置改回 `true`。
 
 ## 2026-11-24 一键放行 + 风险总开关（0.6.0）

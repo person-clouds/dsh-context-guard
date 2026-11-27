@@ -1857,7 +1857,9 @@ assert.equal(docAllowed, null)
       useEffect(fn) { slot++; hooks.push('useEffect'); fn() },
       useRef: (value) => ({ current: value }),
       createElement: (type, props2, ...children) => ({ type, props: props2, children }),
-      Fragment: 'fragment',
+      // 复刻 DSH Web 客户端的 react/jsx-runtime 事实：React.Fragment 是宿主「查看器」上未绑定的 getter，
+      // 一碰就抛。面板若把 React.Fragment 当元素类型传进来，这里立刻炸——线上就是被槽位边界吞掉的。
+      get Fragment() { throw new TypeError("Cannot read properties of undefined (reading 'Fragment')") },
     }
     const loader = { __ModuleLoader__: { load: (m) => { plugin3 = m.factory((id) => id === 'react' ? ReactAllow : undefined) } } }
     const fetch = fetchImpl || (async (url, options) => {
@@ -1878,9 +1880,13 @@ assert.equal(docAllowed, null)
     // 重渲染入口：模拟 React 换帧时 Hook 槽位从 0 重新走
     return { tree, allowCalls, hooks, doc, reseat: (props2) => { slot = 0; return seat.Component(props2) }, props }
   }
-  const textOf = (node) => typeof node === 'string'
-    ? node
-    : (node.children || []).filter(child => child !== null && child !== undefined).map(textOf).join(' ')
+  // 子元素可能是数组（分组用数组承载），逐层展开
+  const textOf = (node) => {
+    if (typeof node === 'string') return node
+    if (Array.isArray(node)) return node.filter(child => child !== null && child !== undefined).map(textOf).join(' ')
+    if (!node || typeof node !== 'object') return ''
+    return (node.children || []).map(textOf).join(' ')
+  }
   // 宿主真实 props：只有 sessionId + input；以前读 props.session.id 会整块不渲染
   const mountedAllow = mountAllowPanel({ props: { sessionId: 'session-allow', input: {} } })
   assert.ok(mountedAllow.tree && mountedAllow.tree.type === 'div', '有会话时必须渲染放行面板')
