@@ -97,7 +97,7 @@
 - [x] 核验态契约与版本对齐（2026-11-22，0.5.0）：标题正则 `^(?:TODO[：:]\s*)?V[：:]` 由 `test.mjs` 字面契约锁住（`V：`、`TODO：V：`、`V：计划：` 命中，`D：` / `G：` 不命中）；README 中英双份写明标题由外部写入（配套 `dsh-workflow-shortcuts` ≥ `0.4.0` 提供 `/V`、`/VP`，只装本插件时手动改名同样生效）、默认 `sessionBudgets` 是可覆盖的示例规则、`/VP` 提示词不写快照故不参与派单去重；`package.json` 升 `0.5.0`；原有预算数字、`deny` 列表与派单去重行为未改。
 - [x] D：会话预算（2026-11-22，配置级）：`scripts/apply-profile.sh` 幂等写入 `sessionBudgets`——`D：` / `TODO D：` 25/40 且不设 `denyTools`（D 会话仍要写计划），并原样写回默认 `V：` 规则（配置整体替换默认，不能只写 D）；旧阈值迁移（1c）收窄到 context-guard 块，web 已调的 40/80 不再被改成 40/160；插件默认值与 `test.mjs` 契约不变（`D：` / `G：` 仍不命中原生规则，D 只在写了配置的 profile 生效）。
 - [x] 核验态只读补 dsh-ops 写工具（2026-11-22）：`denyTools` 默认从 `write`/`edit` 扩到同时拦 `ops_write_file`、`ops_edit_file`、`ops_replace`、`ops_remove`、`ops_move`、`ops_copy`、`ops_batch`（名字不同，精确匹配才能挡住只读绕过）；`apply-profile.sh` 1d 新写入用新列表，1e 对已有 `sessionBudgets` 的 profile 只升级该行；PTC `run_code` 不在默认拒绝列表，README 中英双份写明其边界。
-- [x] 运行预算六条（2026-11-23，R1–R6）：R3 步数硬预算（回合 30/40、会话 60/90、`V：` 25/40）与「压缩只提醒不拒、回复『继续』+30」为本插件已实现部分；R4 核验契约、R2 结论锁/交付模式、R5 编辑与上下文卫生在提示词侧；R1 度量入口为 `scripts/session-metrics.sh`（active 分钟/步数/压缩后重读/核验占比），R6 长任务进度行见 `agent-action.md` §5。口径与验收以 [PLAN-ai-flow-six.md](/home/zh/www/doc/plans/PLAN-ai-flow-six.md) 为准。
+- [x] 运行预算六条（2026-11-23，R1–R6）：R3 步数硬预算（回合 30/40、会话 60/90、`V：` 25/40）与「压缩只提醒不拒、回复『继续』+30」为本插件已实现部分；R4 核验契约、R2 结论锁/交付模式、R5 编辑与上下文卫生在提示词侧；R1 度量入口为 `scripts/session-metrics.sh`（active 分钟/步数/压缩后重读/核验占比），R6 长任务进度行见 `agent-action.md` §5。口径与验收以 [PLAN-ai-flow-six.md](/home/zh/www/personalCloud/plans/doc/PLAN-ai-flow-six.md) 为准。
 
 ## 待办
 
